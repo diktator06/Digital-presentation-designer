@@ -45,6 +45,7 @@ class Element:
     auto_shape: str | None = None
     has_line: bool = False
     insets: tuple[int, int, int, int] = (91440, 45720, 91440, 45720)  # l, t, r, b (EMU)
+    anchor: str = "t"  # vertical text anchor: t | ctr | b
     brand: bool = False  # footer / date / slide number / text repeated on every slide: never a slot
     graphic: str | None = None  # SmartArt / OLE / media frames that cannot be refilled
 
@@ -88,6 +89,25 @@ def _insets(shape) -> tuple[int, int, int, int]:
     if bp is None:
         return d
     return tuple(int(bp.get(k)) if bp.get(k) is not None else dv for k, dv in zip(("lIns", "tIns", "rIns", "bIns"), d))  # type: ignore[return-value]
+
+
+def _anchor(shape) -> str:
+    """Vertical text anchor (t / ctr / b), following placeholder inheritance to layout and master."""
+    node = shape
+    for _ in range(3):
+        txb = node._element.find(qn("p:txBody"))
+        bp = txb.find(qn("a:bodyPr")) if txb is not None else None
+        if bp is not None and bp.get("anchor"):
+            return bp.get("anchor")
+        if not getattr(node, "is_placeholder", False):
+            break
+        try:
+            node = node._base_placeholder
+        except Exception:
+            break
+        if node is None:
+            break
+    return "t"
 
 
 def _has_field(shape) -> bool:
@@ -191,6 +211,7 @@ def extract_elements(slide, theme: Theme, slide_w: int, slide_h: int, include_em
                     auto_shape=prst,
                     has_line=_line_visible(sh),
                     insets=_insets(sh),
+                    anchor=_anchor(sh),
                     brand=ph in ("FOOTER", "DATE", "SLIDE_NUMBER") or _has_field(sh),
                     **base,
                 )

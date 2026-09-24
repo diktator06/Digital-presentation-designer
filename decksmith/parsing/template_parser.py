@@ -32,7 +32,7 @@ from PIL import Image, ImageFilter, ImageStat
 from pptx import Presentation
 
 from decksmith.core.config import settings
-from decksmith.core.fonts import ensure_font
+from decksmith.core.fonts import DOWNLOAD_BUDGET_S, ensure_font
 from decksmith.core.models import (
     Box,
     BrandElement,
@@ -43,7 +43,7 @@ from decksmith.core.models import (
     TemplateProfile,
 )
 from decksmith.parsing.elements import Element, extract_elements
-from decksmith.parsing.ooxml import Theme, color_distance, parse_theme, rgb_to_hex
+from decksmith.parsing.ooxml import Theme, color_distance, paints, parse_theme, rgb_to_hex
 from decksmith.parsing.patterns import build_pattern
 from decksmith.parsing.tokens import build_tokens
 from decksmith.render.soffice import RenderError, pdf_to_pngs, pptx_to_pdf, soffice_path
@@ -105,30 +105,106 @@ def image_stats(png: Path) -> tuple[bool, str, float]:
     return lum < 0.42, rgb_to_hex(med), round(lum, 3)
 
 
+def occupancy_grid(png: Path, bg_hex: str, gw: int = 64, gh: int = 36, edges_only: bool = False) -> list[list[bool]]:
+    """Cells of the rendered slide that carry drawing.
+
+    A cell is busy when it holds edges (per RGB channel, so hue-only borders count)
+    or colour far from the background. Colour-distant regions whose border shows
+    almost no edges are smooth glows/gradients of the background itself, not
+    objects: they stay free. Flat panels have sharp borders and stay busy."""
+    im = Image.open(png).convert("RGB")
+    small = im.resize((gw * 4 + 2, gh * 4 + 2))  # 1 px apron: the edge filter rings the image border
+    edges = small.filter(ImageFilter.FIND_EDGES)
+    px, ex = small.load(), edges.load()
+    edge = [[False] * gw for _ in range(gh)]
+    far = [[False] * gw for _ in range(gh)]
+    for gy in range(gh):
+        for gx in range(gw):
+            ne = nf = 0
+            for dy in range(4):
+                for dx in range(4):
+                    x, y = gx * 4 + dx + 1, gy * 4 + dy + 1
+                    if max(ex[x, y]) > 40:
+                        ne += 1
+                    elif not edges_only and color_distance(rgb_to_hex(px[x, y]), bg_hex) > 120:
+                        nf += 1
+            edge[gy][gx] = ne >= 3
+            far[gy][gx] = not edge[gy][gx] and ne + nf >= 3
+    if edges_only:
+        return edge
+    occ = [[edge[gy][gx] or far[gy][gx] for gx in range(gw)] for gy in range(gh)]
+    seen = [[False] * gw for _ in range(gh)]
+    for sy in range(gh):
+        for sx in range(gw):
+            if not far[sy][sx] or seen[sy][sx]:
+                continue
+            comp, stack = [], [(sx, sy)]
+            seen[sy][sx] = True
+            while stack:
+                x, y = stack.pop()
+                comp.append((x, y))
+                for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                    if 0 <= nx < gw and 0 <= ny < gh and far[ny][nx] and not seen[ny][nx]:
+                        seen[ny][nx] = True
+                        stack.append((nx, ny))
+            members = set(comp)
+            border = hard = 0
+            for x, y in comp:
+                outside = [(nx, ny) for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1))
+                           if 0 <= nx < gw and 0 <= ny < gh and (nx, ny) not in members]
+                if outside:
+                    border += 1
+                    hard += any(edge[ny][nx] for nx, ny in outside)
+            if border and hard < 0.25 * border:
+                for x, y in comp:
+                    occ[y][x] = False
+    return occ
+
+
+def title_clear_box(png: Path, box: Box, slide_w: int, slide_h: int, bg_hex: str) -> Box | None:
+    """Part of a title frame that is free of background art (logo strips baked into the
+    background picture, corner graphics): the title must not run under them."""
+    gw, gh = 64, 36
+    occ = occupancy_grid(png, bg_hex, gw, gh, edges_only=True)  # gradients have no edges, logos do
+    # the band is widened by a row each side: art that only grazes the frame still collides
+    # with text anchored to that edge; two busy cells make a column blocked (not a stray edge)
+    y0, y1 = max(0, int(box.y / slide_h * gh) - 1), min(gh, int(box.b / slide_h * gh) + 2)
+    x0, x1 = max(0, int(box.x / slide_w * gw)), min(gw, int(box.r / slide_w * gw))
+    run_min = max(8, int(0.15 * gw))  # long horizontal runs are rules/underlines, not art to avoid
+    for gy in range(y0, y1):
+        gx = 0
+        while gx < gw:
+            if not occ[gy][gx]:
+                gx += 1
+                continue
+            end = gx
+            while end < gw and occ[gy][end]:
+                end += 1
+            if end - gx >= run_min:
+                for k in range(gx, end):
+                    occ[gy][k] = False
+            gx = end
+    start = x0 + max(2, (x1 - x0) // 3)  # the first third may hold the title's own accent graphics
+    for gx in range(start, x1):
+        if sum(occ[gy][gx] for gy in range(y0, y1)) >= 2:
+            new_r = int(gx / gw * slide_w) - int(0.01 * slide_w)
+            if new_r - box.x >= 0.45 * box.w:
+                return Box(x=box.x, y=box.y, w=new_r - box.x, h=box.h)
+            return None
+    return None
+
+
 def free_content_box(png: Path, slide_w: int, slide_h: int, below_y: int, margins, bg_hex: str) -> tuple[Box | None, bool]:
     """Largest empty rectangle below `below_y` on a rendered empty layout -> (box, textured).
 
-    Occupancy = strong edges or colors far from the background, on a 64x36
-    grid; the maximal all-free rectangle is found with the histogram method.
+    Occupancy (`occupancy_grid`) on a 64x36 grid; the maximal all-free rectangle
+    is found with the histogram method.
     A background that is busy almost everywhere (photo, texture, blueprint grid)
     is reported as `textured`: then the whole area under the title is usable and
     the composer puts content on a plate for legibility.
     """
     gw, gh = 64, 36
-    im = Image.open(png).convert("RGB")
-    small = im.resize((gw * 4, gh * 4))
-    edges = small.convert("L").filter(ImageFilter.FIND_EDGES)
-    px, ex = small.load(), edges.load()
-    occ = [[False] * gw for _ in range(gh)]
-    for gy in range(gh):
-        for gx in range(gw):
-            busy = 0
-            for dy in range(4):
-                for dx in range(4):
-                    x, y = gx * 4 + dx, gy * 4 + dy
-                    if ex[x, y] > 40 or color_distance(rgb_to_hex(px[x, y]), bg_hex) > 120:
-                        busy += 1
-            occ[gy][gx] = busy >= 3
+    occ = occupancy_grid(png, bg_hex, gw, gh)
     y0 = max(0, int(below_y / slide_h * gh) + 1)
     x_min = int(margins.left / slide_w * gw)
     x_max = gw - int(margins.right / slide_w * gw)
@@ -175,6 +251,19 @@ def region_color(png: Path, box: Box, slide_w: int, slide_h: int) -> str | None:
     pal = q.getpalette()
     i = counts[0][1]
     return rgb_to_hex((pal[i * 3], pal[i * 3 + 1], pal[i * 3 + 2]))
+
+
+def region_colors(png: Path, box: Box, slide_w: int, slide_h: int, min_share: float = 0.1) -> list[str]:
+    """Rendered colours covering at least `min_share` of a region (a gradient gives several):
+    text placed there must be readable on each of them."""
+    im = Image.open(png).convert("RGB")
+    sx, sy = im.width / slide_w, im.height / slide_h
+    crop = im.crop((int(box.x * sx), int(box.y * sy), max(int(box.r * sx), int(box.x * sx) + 2), max(int(box.b * sy), int(box.y * sy) + 2)))
+    q = crop.resize((64, 36)).quantize(colors=6)
+    pal = q.getpalette()
+    total = 64 * 36
+    return [rgb_to_hex((pal[i * 3], pal[i * 3 + 1], pal[i * 3 + 2])) for n, i in sorted(q.getcolors() or [], reverse=True)
+            if n >= min_share * total]
 
 
 def rendered_palette(pngs: list[Path]) -> Counter:
@@ -267,6 +356,14 @@ def _render_layout_probe(path: Path, out: Path) -> list[Path]:
     for sldId in list(sldIdLst):
         prs.part.drop_rel(sldId.rId)
         sldIdLst.remove(sldId)
+    from pptx.oxml.ns import qn
+
+    for container in list(prs.slide_masters) + [lay for _, _, lay in all_layouts(prs)]:
+        for ph in container.placeholders:  # prompt text would read as occupied area
+            if "FOOTER" in str(ph.placeholder_format.type) or "SLIDE_NUMBER" in str(ph.placeholder_format.type):
+                continue
+            for t in ph._element.iter(qn("a:t")):
+                t.text = ""
     for _, _, layout in all_layouts(prs):
         s = prs.slides.add_slide(layout)
         for ph in list(s.placeholders):
@@ -376,6 +473,7 @@ def analyze_template(path: str | Path, *, name: str | None = None, force: bool =
                 "type": str(pf.type).split(".")[-1].split(" ")[0],
                 "name": ph.name,
                 "box": Box(x=int(ph.left or 0), y=int(ph.top or 0), w=int(ph.width or 0), h=int(ph.height or 0)).model_dump(),
+                "painted": paints(ph._element),
             })
         types = [p["type"] for p in phs]
         title_ph = next((p for p in phs if p["type"] in ("TITLE", "CENTER_TITLE")), None)
@@ -388,6 +486,8 @@ def analyze_template(path: str | Path, *, name: str | None = None, force: bool =
             body_count=sum(t in ("BODY", "OBJECT") for t in types),
             picture_count=sum(t == "PICTURE" for t in types),
             title_box=Box(**title_ph["box"]) if title_ph else None,
+            painted_idx=[p["idx"] for p in phs if p["painted"] and p["type"] not in
+                         ("TITLE", "CENTER_TITLE", "FOOTER", "DATE", "SLIDE_NUMBER")],
         )
         if gi < len(layout_cv):
             li.dark, li.background_hex, _ = layout_cv[gi]
@@ -448,7 +548,8 @@ def analyze_template(path: str | Path, *, name: str | None = None, force: bool =
         for e in extract_elements(layouts_raw[li.index][2], themes[li.master_index], sw, sh):
             if e.kind == "text" and e.style and e.style.font:
                 fams[e.style.font] += 1
-    font_avail = {f: ensure_font(f) for f, _ in fams.most_common(6)}
+    deadline = time.monotonic() + DOWNLOAD_BUDGET_S
+    font_avail = {f: ensure_font(f, deadline=deadline) for f, _ in fams.most_common(6)}
 
     # --- 5. tokens --------------------------------------------------------------------
     render_colors = rendered_palette(slide_pngs or layout_pngs)
@@ -466,6 +567,20 @@ def analyze_template(path: str | Path, *, name: str | None = None, force: bool =
                                                            li.background_hex or tokens.background_hex)
             if li.content_box:
                 li.content_bg_hex = region_color(Path(li.thumbnail), li.content_box, sw, sh)
+            tb_ = li.title_box or tokens.title_box
+            if tb_ is not None:
+                li.title_clear = title_clear_box(Path(li.thumbnail), tb_, sw, sh, li.background_hex or tokens.background_hex)
+            # a painted placeholder counts only if the probe render shows it (the probe slide has no
+            # placeholders, so whatever is drawn in its frame comes from the layout itself)
+            bg_ = li.background_hex or tokens.background_hex
+            boxes = {ph["idx"]: Box(**ph["box"]) for ph in li.placeholders}
+            li.painted_idx = [i for i in li.painted_idx if i in boxes and boxes[i].area > 0
+                              and color_distance(region_color(Path(li.thumbnail), boxes[i], sw, sh) or bg_, bg_) > 20]
+    for pat in patterns:  # slots on visibly painted layout placeholders (see Slot.painted)
+        if pat.layout_index is not None and 0 <= pat.layout_index < len(layouts):
+            painted = set(layouts[pat.layout_index].painted_idx)
+            for sl in pat.slots:
+                sl.painted = sl.placeholder_idx in painted
     content_kinds = {PatternKind.cards, PatternKind.text, PatternKind.steps, PatternKind.stats, PatternKind.table,
                      PatternKind.chart, PatternKind.image_text, PatternKind.two_column}
 
@@ -475,7 +590,8 @@ def analyze_template(path: str | Path, *, name: str | None = None, force: bool =
         simple = 1.0 if li.body_count + li.picture_count == 0 else 0.7
         titled = 1.0 if li.has_title else 0.55  # a title placeholder keeps the template's title style
         calm = 0.6 if li.textured else 1.0  # prefer layouts whose content area is really empty
-        return (uses + 1) * area * simple * titled * calm
+        clean = 0.3 if li.painted_idx else 1.0  # painted placeholders would show as empty cards
+        return (uses + 1) * area * simple * titled * calm * clean
 
     canvas: dict[str, int] = {}
     for tone in ("light", "dark"):

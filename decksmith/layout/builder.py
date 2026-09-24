@@ -16,6 +16,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from lxml import etree
 from PIL import Image
 from pptx import Presentation
 from pptx.oxml.ns import qn
@@ -51,7 +52,8 @@ from decksmith.layout.selector import Variant
 from pptx.enum.text import MSO_ANCHOR
 
 from decksmith.layout.textfit import fit_composite, fit_font_size, max_chars_for, measure, snap_down
-from decksmith.parsing.ooxml import rel_luminance
+from decksmith.parsing.ooxml import contrast_ratio, rel_luminance
+from decksmith.parsing.template_parser import region_color, region_colors
 
 log = logging.getLogger(__name__)
 EMU_PT = 12700
@@ -108,6 +110,25 @@ class DeckBuilder:
         self.layouts = _layouts(self.prs)
         self.report = BuildReport()
         self._bold_first: set[str] = set()
+        self._inline_values = False
+        self._bg_cache: dict[tuple, str | None] = {}
+        self._clear_prompt_texts()
+
+    def _clear_prompt_texts(self) -> None:
+        """Sample text inside layout/master placeholders ("Click to edit", "Образец текста") is a
+        prompt, not design. Some renderers (LibreOffice) draw it on every slide of that layout, so it
+        is blanked in the output deck; runs/paragraphs stay, so inherited formatting is unchanged.
+        Footer, date and slide-number placeholders keep their content."""
+        keep = {"FOOTER", "DATE", "SLIDE_NUMBER"}
+        for container in list(self.prs.slide_masters) + self.layouts:
+            for ph in container.placeholders:
+                try:
+                    if str(ph.placeholder_format.type).split(".")[-1].split(" ")[0] in keep:
+                        continue
+                except Exception:
+                    continue
+                for t in ph._element.iter(qn("a:t")):
+                    t.text = ""
 
     # ------------------------------------------------------------------ public
     def build(self, plan: DeckPlan, decisions: list[SlideLayout], images: dict[str, str] | None = None,
@@ -133,6 +154,9 @@ class DeckBuilder:
                 d.rationale += f" | fallback after error: {e}"
             if spec.notes:
                 slide.notes_slide.notes_text_frame.text = spec.notes
+            for fld in slide._element.iter(qn("a:fld")):  # cached page numbers of cloned examples
+                if fld.get("type") == "slidenum" and fld.find(qn("a:t")) is not None:
+                    fld.find(qn("a:t")).text = str(n + 1)
             source = None
             kind = d.compose_kind or ""
             if d.mode == "clone" and d.pattern_id:
@@ -170,7 +194,8 @@ class DeckBuilder:
         cloneable = list(layout.iter_cloneable_placeholders())
         sw, sh_ = self.profile.tokens.slide_w, self.profile.tokens.slide_h
         pad = int(0.01 * sw)
-        for sph, lph in zip(list(slide.placeholders), cloneable):
+        # both sides in document order (slide.placeholders is sorted by idx, the clones are not)
+        for sph, lph in zip([s for s in slide.shapes if s.is_placeholder], cloneable):
             try:
                 x, y, w, h = lph.left, lph.top, lph.width, lph.height
                 if None in (x, y, w, h):
@@ -195,6 +220,23 @@ class DeckBuilder:
                     cnv.set("id", str(slide.shapes._next_shape_id))  # unique id on the new slide
                 slide.shapes._spTree.append(el)
         return slide
+
+    def _clear_title_box(self, layout_index: int | None, box: Box) -> Box | None:
+        """Title frame shortened to end before background art that the layout draws inside
+        the title band (a logo strip baked into the background, corner graphics).
+        None when the frame is already clear or is not in that band."""
+        layouts = self.profile.layouts
+        if layout_index is None or not 0 <= layout_index < len(layouts):
+            return None
+        tc = layouts[layout_index].title_clear
+        if tc is None or box.r <= tc.r:
+            return None
+        if min(box.b, tc.b) - max(box.y, tc.y) < 0.5 * min(box.h, tc.h):
+            return None
+        w = tc.r - box.x
+        if w < 0.45 * box.w:
+            return None
+        return Box(x=box.x, y=box.y, w=w, h=box.h)
 
     def _shape(self, slide, pat: Pattern, slot: Slot):
         if pat.source == "layout":
@@ -272,6 +314,9 @@ class DeckBuilder:
             if s.kind == "text" and s.item_index is not None and s.role not in (SlotRole.number, SlotRole.label):
                 item_text_slots.setdefault(s.item_index, []).append(s)
         is_quote = pat.kind == PatternKind.quote and bool(spec.quote)
+        # items with values (KPI) on a pattern without a number slot keep the value in their title
+        self._inline_values = not any(s.role == SlotRole.number and s.item_index is not None for s in pat.slots) and not any(
+            s.para_roles and s.para_roles[0] == SlotRole.number for s in pat.slots)
         used_item_roles: set[tuple[int, str]] = set()
         used_item_texts: dict[int, set[str]] = {}
         used_texts: set[str] = set()
@@ -298,7 +343,7 @@ class DeckBuilder:
                 used_item_roles.add(key)
                 only = len(item_text_slots.get(slot.item_index, [])) == 1 and not slot.para_roles
                 if only and slot.role not in (SlotRole.number, SlotRole.label) and it.title and it.text:
-                    fills[slot.id] = ([it.title, it.text], [0, 0])
+                    fills[slot.id] = ([self._head(it), it.text], [0, 0])
                     self._bold_first.add(slot.id)
                 else:
                     paras, tidx = self._item_text(slot, it, slot.item_index)
@@ -392,21 +437,18 @@ class DeckBuilder:
                 runs = sh.text_frame.paragraphs[0].runs
                 if runs:
                     runs[0].font.bold = True
-            self._fit(slide, n, sh, slot, paras)
-        # frames/avatars that only served a removed slot go too
-        keep_ids = {s.shape_id for s in pat.slots if s.id not in deleted}
-        by_container: dict[int, list[str]] = {}
-        for sid, cids in pat.containers.items():
-            for c in cids:
-                by_container.setdefault(c, []).append(sid)
-        for cid, sids in by_container.items():
-            if cid in keep_ids:
-                continue
-            if all(s in deleted for s in sids):
-                sh = shape_by_id(slide, cid)
-                if sh is not None:
-                    delete_shape(sh)
-
+            fit_slot = slot
+            if slot.role == SlotRole.title and slot.item_index is None:
+                clear = self._clear_title_box(pat.layout_index, slot.box)
+                if clear is not None:
+                    x, y, h = sh.left, sh.top, sh.height  # pin all four: placeholders may inherit
+                    sh.left, sh.top, sh.width, sh.height = x, y, clear.w, h
+                    fit_slot = slot.model_copy(update={"box": clear})
+            self._fit(slide, n, sh, fit_slot, paras)
+            if slot.id in pat.backdrops:
+                self._fit_backdrop(slide, pat.backdrops[slot.id], sh, fit_slot, paras)
+            else:
+                self._ensure_contrast(sh, slot, pat)
         # pictures
         pics = [s for s in pat.slots if s.kind == "picture" and (s.item_index is None or s.item_index < keep)]
         content_pics = sorted([s for s in pics if s.role == SlotRole.image], key=lambda s: -s.box.area)
@@ -427,8 +469,10 @@ class DeckBuilder:
                     log.warning("image replace failed: %s", e)
             if getattr(sh, "is_placeholder", False) and sh.shape_type != 13:
                 delete_shape(sh)  # empty picture placeholder
+                deleted.add(slot.id)
             elif not _is_decorative_picture(sh):
                 delete_shape(sh)
+                deleted.add(slot.id)
         for slot in pics:
             if slot.role == SlotRole.icon and icons and slot.item_index is not None and slot.item_index < len(icons):
                 ic = icons[slot.item_index]
@@ -438,6 +482,19 @@ class DeckBuilder:
                         replace_picture(slide, sh, ic, mode="contain")
                     except Exception:
                         pass
+        # frames/avatars that only served a removed slot go too
+        keep_ids = {s.shape_id for s in pat.slots if s.id not in deleted}
+        by_container: dict[int, list[str]] = {}
+        for sid, cids in pat.containers.items():
+            for c in cids:
+                by_container.setdefault(c, []).append(sid)
+        for cid, sids in by_container.items():
+            if cid in keep_ids:
+                continue
+            if all(s in deleted for s in sids):
+                sh = shape_by_id(slide, cid)
+                if sh is not None:
+                    delete_shape(sh)
         # native tables / charts of the example: refill with our data in the template's style
         t = self.profile.tokens
         for slot in [s for s in pat.slots if s.kind in ("table", "chart")]:
@@ -466,6 +523,57 @@ class DeckBuilder:
             if ph.has_text_frame and not ph.text_frame.text.strip():
                 delete_shape(ph)
 
+    def _ensure_contrast(self, sh, slot: Slot, pat: Pattern) -> None:
+        """A slot whose own colour is unreadable on what the template renders under it
+        (below 3:1, e.g. a purple heading on a purple card) gets the most readable of the
+        template's text colours. Moderate cases stay as designed; the audit reports them."""
+        col = slot.style.color_hex
+        if not col or not pat.thumbnail or not Path(pat.thumbnail).exists():
+            return
+        key = (pat.id, slot.box.x, slot.box.y, slot.box.w, slot.box.h)
+        if key not in self._bg_cache:
+            try:
+                t = self.profile.tokens
+                self._bg_cache[key] = region_color(Path(pat.thumbnail), slot.box, t.slide_w, t.slide_h)
+            except Exception:
+                self._bg_cache[key] = None
+        bg = self._bg_cache[key]
+        if bg is None or contrast_ratio(col, bg) >= 3.0:  # WCAG minimum for large text
+            return
+        own = [s.style.color_hex for s in pat.slots if s.style.color_hex and s.style.color_hex != col]
+        cands = own + [self.profile.tokens.text_hex] + [c.hex for c in self.profile.tokens.palette[:8]]
+        best = max(cands, key=lambda c: contrast_ratio(c, bg), default=None)
+        if best is None or contrast_ratio(best, bg) < 4.5:
+            best = "FFFFFF" if rel_luminance(bg) < 0.4 else "000000"
+        for r in sh._element.iter(qn("a:r")):
+            rpr = r.find(qn("a:rPr"))
+            if rpr is None:
+                rpr = etree.Element(qn("a:rPr"))
+                r.insert(0, rpr)
+            for old_fill in rpr.findall(qn("a:solidFill")):
+                rpr.remove(old_fill)
+            fill = etree.Element(qn("a:solidFill"))
+            etree.SubElement(fill, qn("a:srgbClr")).set("val", best)
+            # schema order: ln? then fills before effects/latin/ea/cs
+            ln = rpr.find(qn("a:ln"))
+            rpr.insert(list(rpr).index(ln) + 1 if ln is not None else 0, fill)
+
+    def _fit_backdrop(self, slide, backdrop_id: int, sh, slot: Slot, paras: list[str]) -> None:
+        """Resize the badge behind a title to the new text: same padding as in the example,
+        never wider than the (clear) title frame."""
+        bd = shape_by_id(slide, backdrop_id)
+        if bd is None or bd.width is None:
+            return
+        rpr = sh._element.find(".//" + qn("a:rPr"))
+        size = int(rpr.get("sz")) / 100 if rpr is not None and rpr.get("sz") else (slot.style.size or self.profile.tokens.type_scale.title)
+        font = slot.style.font or self.profile.tokens.heading_font
+        m = measure(paras, font, size, slot.box.w, slot.style.bold)
+        x0, pad = int(bd.left), max(int(sh.left) - int(bd.left), 0)
+        right = min(int(sh.left) + m.width_emu + pad, slot.box.r + pad)
+        bd.width = max(right - x0, 2 * pad + int(0.05 * self.profile.tokens.slide_w))
+        if m.lines > 1:  # a wrapped title keeps its plate under every line
+            bd.height = max(int(bd.height), m.height_emu + 2 * max(int(sh.top) - int(bd.top), 0))
+
     def _nearest_below(self, num: Slot, pat: Pattern, fills) -> Slot | None:
         best, bd = None, None
         for s in pat.slots:
@@ -480,6 +588,12 @@ class DeckBuilder:
                 best, bd = s, dist
         return best
 
+    def _head(self, it: Item) -> str:
+        """Item heading; the value leads it when the pattern has nowhere else to show numbers."""
+        if it.value and it.title and self._inline_values:
+            return f"{it.value} {it.title}"
+        return it.title or it.value
+
     def _item_text(self, slot: Slot, it: Item, i: int) -> tuple[list[str], list[int] | None]:
         if slot.para_roles:
             head_role = slot.para_roles[0]
@@ -487,7 +601,7 @@ class DeckBuilder:
                 head = it.value or number_format(slot.sample_text.split("\n")[0], i) or f"{i + 1}"
                 body = it.text or it.title
             else:
-                head = it.title or it.value
+                head = self._head(it)
                 body = it.text
             return ([head, body], [0, 1]) if body else ([head], [0])
         role = slot.role
@@ -495,7 +609,7 @@ class DeckBuilder:
             fmt = number_format(slot.sample_text, i)
             return ([it.value or fmt or f"{i + 1}"] if (it.value or fmt) else [it.title], None)
         if role == SlotRole.item_title:
-            return ([it.title or it.value or it.text], None)
+            return ([self._head(it) or it.text], None)
         if role == SlotRole.item_text:
             return ([it.text or it.title or it.value], None)
         if role == SlotRole.label:
@@ -548,8 +662,18 @@ class DeckBuilder:
             idx = next(iter(prof.canvas_layouts.values()), 0)
         return idx, prof.layouts[idx].dark
 
-    def _style_for(self, slide_bg: str) -> C.Style:
-        return C.Style(tokens=self.profile.tokens, bg=slide_bg, dark=rel_luminance(slide_bg) < 0.4)
+    def _region_colors(self, layout_info, region: Box | None) -> list[str]:
+        """Colours the layout renders under `region` (several for gradients and glows)."""
+        if region is None or not layout_info.thumbnail or not Path(layout_info.thumbnail).exists():
+            return []
+        try:
+            return region_colors(Path(layout_info.thumbnail), region, self.profile.tokens.slide_w, self.profile.tokens.slide_h)
+        except Exception:
+            return []
+
+    def _style_for(self, slide_bg: str, samples: list[str] | None = None) -> C.Style:
+        return C.Style(tokens=self.profile.tokens, bg=slide_bg, dark=rel_luminance(slide_bg) < 0.4,
+                       bg_samples=tuple(samples or ()))
 
     def _title_style(self):
         """Dominant title style of the template's content examples (for layouts without a title placeholder)."""
@@ -574,19 +698,26 @@ class DeckBuilder:
         for ph in list(slide.placeholders):
             delete_shape(ph)
         bg = layout_info.content_bg_hex or layout_info.background_hex or t.background_hex
-        st = self._style_for(bg)
         m = t.margins
-        w = t.slide_w - m.left - m.right
+        # the divider sits in the layout's free area found by CV (clear of background art), else mid-slide
+        region = Box(x=m.left, y=int(0.18 * t.slide_h), w=t.slide_w - m.left - m.right, h=int(0.7 * t.slide_h))
+        cb = layout_info.content_box
+        if cb is not None and cb.area >= 0.15 * t.slide_w * t.slide_h:
+            x0, y0 = max(cb.x, m.left), max(cb.y, m.top)
+            x1, y1 = min(cb.r, t.slide_w - m.right), min(cb.b, t.slide_h - m.bottom)
+            if x1 - x0 > 0.3 * t.slide_w and y1 - y0 > 0.25 * t.slide_h:
+                region = Box(x=x0, y=y0, w=x1 - x0, h=y1 - y0)
+        st = self._style_for(bg, self._region_colors(layout_info, region))
         title = plan_title or spec.title
         size = snap_down(min(t.type_scale.title * 1.3, t.type_scale.number), t.type_scale.sizes)
-        box = Box(x=m.left, y=int(0.30 * t.slide_h), w=int(w * 0.85), h=int(0.26 * t.slide_h))
+        box = Box(x=region.x, y=region.y + int(0.1 * region.h), w=int(region.w * 0.9), h=int(0.42 * region.h))
         C.add_text(slide, box, [title], st, role="title", size=size, anchor="bottom", bold=True, name="Title")
-        C.add_line(slide, m.left + 45720, box.b + int(0.03 * t.slide_h), m.left + int(w * 0.18), box.b + int(0.03 * t.slide_h),
-                   st.accent, 3.0, name="Accent rule")
+        rule_y = box.b + int(0.04 * region.h)
+        C.add_line(slide, region.x + 45720, rule_y, region.x + int(region.w * 0.18), rule_y, st.accent, 3.0, name="Accent rule")
         sub = spec.subtitle or spec.message
         if sub:
-            C.add_text(slide, Box(x=m.left, y=box.b + int(0.06 * t.slide_h), w=int(w * 0.8), h=int(0.16 * t.slide_h)), [sub], st,
-                       role="subtitle", color=st.muted, name="Subtitle")
+            C.add_text(slide, Box(x=region.x, y=box.b + int(0.09 * region.h), w=int(region.w * 0.85), h=int(0.3 * region.h)),
+                       [sub], st, role="subtitle", color=st.muted, name="Subtitle")
         return slide
 
     def _compose(self, n: int, spec: SlideSpec, kind: str, image: str | None, icons: list[str | None] | None):
@@ -615,8 +746,13 @@ class DeckBuilder:
         if title_ph is not None:
             title_ph.text_frame.text = spec.title
             tb = Box(x=int(title_ph.left), y=int(title_ph.top), w=int(title_ph.width), h=int(title_ph.height))
+            clear = self._clear_title_box(idx, tb)
+            if clear is not None:
+                title_ph.left, title_ph.top, title_ph.width, title_ph.height = tb.x, tb.y, clear.w, tb.h
+                tb = clear
             size, font, bold = t.type_scale.title, t.heading_font, False
         else:
+            tb = self._clear_title_box(idx, tb) or tb
             font, size, bold, color = self._title_style()
             font, size = font or t.heading_font, size or t.type_scale.title
         # the title must fit its own frame: overflowing titles grow over content or off the slide
@@ -649,13 +785,18 @@ class DeckBuilder:
         x0 = region.x if on_title_guide else max(region.x, m.left)
         y0 = max(region.y, title_bottom + int(0.025 * t.slide_h))
         x1 = min(region.r, t.slide_w - m.right)
-        y1 = min(region.b, t.slide_h - m.bottom)
+        # bottom: above the layout's footer / date / number zone, with a small safe area
+        foot = [Box(**ph["box"]) for ph in layout_info.placeholders
+                if ph.get("type") in ("FOOTER", "DATE", "SLIDE_NUMBER") and ph.get("box")]
+        foot_top = min((b.y for b in foot if b.y > 0.75 * t.slide_h and b.h > 0), default=t.slide_h)
+        y1 = min(region.b, t.slide_h - m.bottom, foot_top - int(0.015 * t.slide_h), int(0.94 * t.slide_h))
         if x1 - x0 < 0.3 * t.slide_w:  # only a sliver is free: use the width between margins
             x0, x1 = m.left, t.slide_w - m.right
         if y1 - y0 < 0.3 * t.slide_h:  # never push content below the slide: take the area under the title
             y1 = t.slide_h - m.bottom
             y0 = max(title_bottom + int(0.02 * t.slide_h), min(y0, y1 - int(0.3 * t.slide_h)))
         region = Box(x=x0, y=y0, w=max(x1 - x0, 1), h=max(y1 - y0, 1))
+        st = self._style_for(bg, self._region_colors(layout_info, region))
         if layout_info.textured:
             # busy background: a quiet plate in template colours keeps text legible
             pad = int(0.02 * t.slide_w)
@@ -665,8 +806,9 @@ class DeckBuilder:
                        rounded=True, name="Plate")
             st = self._style_for(plate_color)
         lead = spec.subtitle or (spec.message if kind != "bullets" else "")
-        if lead:
-            lh = int(region.h * 0.16)
+        if lead:  # sized to its text (at body size), between 12% and 30% of the region
+            need = measure([lead], t.body_font, t.type_scale.body, region.w).height_emu
+            lh = min(max(need, int(region.h * 0.12)), int(region.h * 0.3))
             C.add_text(slide, Box(x=region.x, y=region.y, w=region.w, h=lh), [lead], st, role="body", color=st.muted,
                        name="Lead")
             region = Box(x=region.x, y=region.y + lh + int(region.h * 0.03), w=region.w, h=region.h - lh - int(region.h * 0.03))
@@ -691,9 +833,15 @@ class DeckBuilder:
         elif kind == "quote":
             C.draw_quote(slide, region, spec.quote or spec.message, spec.quote_author, st)
         else:
-            bullets = spec.bullets or [f"{i.title}: {i.text}" if i.text else i.title for i in spec.items] or [spec.message]
+            bullets = spec.bullets or [_item_line(i) for i in spec.items] or [spec.message]
             C.draw_bullets(slide, region, bullets, st, self.variant.max_bullets)
         return slide
+
+
+def _item_line(it: Item) -> str:
+    """One bullet for an item: value first (a KPI must not lose its number), then title: text."""
+    head = " ".join(x for x in (it.value, it.title) if x)
+    return f"{head}: {it.text}" if head and it.text else (head or it.text)
 
 
 def _fmt_num(v: float, unit: str) -> str:

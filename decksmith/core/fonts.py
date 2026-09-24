@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import platform
 import re
 import threading
+import time
 from functools import lru_cache
 from pathlib import Path
 
@@ -87,12 +89,31 @@ def refresh_index() -> None:
     font_index.cache_clear()
 
 
+# weight words that some templates put into the family name ("Montserrat Medium")
+WEIGHTS = {"thin": 100, "hairline": 100, "extralight": 200, "ultralight": 200, "light": 300, "regular": 400,
+           "book": 400, "normal": 400, "medium": 500, "semibold": 600, "demibold": 600, "bold": 700,
+           "extrabold": 800, "ultrabold": 800, "black": 900, "heavy": 900}
+
+
+def split_weight(family: str) -> tuple[str, str | None]:
+    """'Montserrat Medium' -> ('Montserrat', 'medium'); 'Open Sans' -> ('Open Sans', None)."""
+    words = family.split()
+    for k in (2, 1):
+        if len(words) > k and "".join(words[-k:]).lower() in WEIGHTS:
+            return " ".join(words[:-k]), "".join(words[-k:]).lower()
+    return family, None
+
+
 def find_font_file(family: str, bold: bool = False) -> str | None:
     idx = font_index()
     fam = idx.get(family.lower())
-    if not fam:
-        return None
     prefs = ["bold", "semibold", "medium"] if bold else ["regular", "book", "normal", "roman", "medium"]
+    if not fam:
+        base, weight = split_weight(family)
+        fam = idx.get(base.lower()) if weight else None
+        if not fam:
+            return None
+        prefs = [weight] + prefs
     for p in prefs:
         if p in fam:
             return fam[p]
@@ -109,41 +130,51 @@ PROPRIETARY = {
     "verdana", "tahoma", "georgia", "courier new", "sf pro", "sf pro display", "sf pro text",
 }
 _MISSING: set[str] = set()
+_NET_DOWN_UNTIL = 0.0
+DOWNLOAD_BUDGET_S = 15.0  # per template analysis: fonts are a fidelity bonus, never a blocker
 
 
-def try_download_google_font(family: str) -> bool:
-    """Fetch an OFL/Apache family from the google/fonts GitHub mirror by name."""
-    if family.lower() in PROPRIETARY or family.lower() in _MISSING:
+def try_download_google_font(family: str, deadline: float | None = None) -> bool:
+    """Fetch an open (OFL/Apache) family from Google Fonts by name: one CSS request per weight
+    lists a TrueType file (legacy user agent). Time-bounded: short timeouts, a shared deadline
+    and a 10-minute back-off when the network is unreachable, so a slow or offline machine
+    never stalls template analysis."""
+    global _NET_DOWN_UNTIL
+    base, weight = split_weight(family)
+    if base.lower() in PROPRIETARY or base.lower() in _MISSING or time.monotonic() < _NET_DOWN_UNTIL:
         return False
-    slug = _gf_slug(family)
-    base = "https://raw.githubusercontent.com/google/fonts/main"
-    candidates = []
-    stem = family.replace(" ", "")
-    for lic in ("ofl", "apache", "ufl"):
-        candidates += [
-            (f"{base}/{lic}/{slug}/{stem}-Regular.ttf", f"{stem}-Regular.ttf"),
-            (f"{base}/{lic}/{slug}/{stem}-Bold.ttf", f"{stem}-Bold.ttf"),
-            (f"{base}/{lic}/{slug}/{stem}%5Bwght%5D.ttf", f"{stem}[wght].ttf"),
-        ]
+    if os.environ.get("DECKSMITH_FONT_DOWNLOAD", "1") == "0":
+        return False
     got = False
-    with _LOCK, httpx.Client(timeout=20, follow_redirects=True) as client:
-        for url, fname in candidates:
+    with _LOCK, httpx.Client(timeout=httpx.Timeout(6.0, connect=2.5), follow_redirects=True,
+                             headers={"User-Agent": "Mozilla/4.0"}) as client:
+        for w in sorted({400, 700, WEIGHTS.get(weight or "", 400)}):
+            if deadline is not None and time.monotonic() > deadline:
+                break
             try:
-                r = client.get(url)
-            except Exception:
-                continue
-            if r.status_code == 200 and len(r.content) > 10000:
-                (user_font_dir() / fname).write_bytes(r.content)
-                got = True
+                css = client.get("https://fonts.googleapis.com/css2", params={"family": f"{base}:wght@{w}"})
+                if css.status_code != 200:
+                    if w == 400:
+                        break  # not a Google Fonts family
+                    continue  # family lacks this weight
+                urls = re.findall(r"url\((https://fonts\.gstatic\.com/[^)]+\.ttf)\)", css.text)
+                if urls:
+                    r = client.get(urls[0])
+                    if r.status_code == 200 and len(r.content) > 10000:
+                        (user_font_dir() / f"{_gf_slug(base)}-{w}.ttf").write_bytes(r.content)
+                        got = True
+            except httpx.TransportError:
+                _NET_DOWN_UNTIL = time.monotonic() + 600
+                break
     if got:
         refresh_index()
         log.info("downloaded Google font %s", family)
     else:
-        _MISSING.add(family.lower())
+        _MISSING.add(base.lower())
     return got
 
 
-def ensure_font(family: str, allow_download: bool = True) -> tuple[bool, str | None]:
+def ensure_font(family: str, allow_download: bool = True, deadline: float | None = None) -> tuple[bool, str | None]:
     """Returns (available, file). Tries to make the family available locally."""
     f = find_font_file(family)
     if f:
@@ -151,7 +182,7 @@ def ensure_font(family: str, allow_download: bool = True) -> tuple[bool, str | N
     alt = FALLBACKS.get(family.lower())
     if alt and find_font_file(alt):
         return False, find_font_file(alt)
-    if allow_download and try_download_google_font(family):
+    if allow_download and try_download_google_font(family, deadline):
         f = find_font_file(family)
         if f:
             return True, f

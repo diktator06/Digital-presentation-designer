@@ -31,6 +31,7 @@ def cmd_analyze(a) -> None:
 
 
 def cmd_run(a) -> None:
+    from decksmith.core.models import DeckPlan
     from decksmith.generation.planner import Brief
     from decksmith.pipeline import Pipeline
 
@@ -39,6 +40,7 @@ def cmd_run(a) -> None:
         override_settings(_p(cfg["settings"]))
     pipe = Pipeline()
     brief = Brief(**cfg["brief"])
+    plan = DeckPlan.model_validate_json(_p(cfg["plan"]).read_text(encoding="utf-8")) if cfg.get("plan") else None
     t0 = time.time()
     corpus = pipe.prepare_content([_p(f) for f in cfg.get("content", [])], cfg.get("content_text", ""))
     profiles = [pipe.prepare_template(_p(t)) for t in cfg["templates"]]
@@ -51,7 +53,7 @@ def cmd_run(a) -> None:
                 if ev.get("status") == "done" and ev.get("stage") in ("plan", "audit", "export", "done"):
                     print(f"  [{_n}] {ev.get('stage')} {ev.get('variant', '')} t={ev.get('t')}s "
                           + (f"score={ev['score']}" if "score" in ev else ""))
-            r = await pipe.run(prof, corpus, brief, cfg.get("variants"), emit=emit)
+            r = await pipe.run(prof, corpus, brief, cfg.get("variants"), emit=emit, plan=plan)
             for v in r.variants:
                 summary.append({"template": prof.name, "variant": v.name, "score": v.audit.score if v.audit else None,
                                 "pptx": v.pptx, "pdf": v.pdf, "html": v.html, "error": v.error})

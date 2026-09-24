@@ -37,6 +37,12 @@ KW = {
 }
 
 
+# Text addressed to the person filling the template (not sample content): "используй слайд 7 для
+# оформления", "обязательный блок", "this template". Plain filler prompts ("вставьте текст") are NOT here:
+# they are normal example-slide content and are replaced anyway.
+INSTRUCTION_RE = re.compile(
+    r"(используй(?:те)?\b|для оформления|эт(?:от|ом|ому|им) шаблон\w*|шаблон(?:ом|а)? презентации|обязательный блок|"
+    r"не забудь(?:те)?\b|привет,|use this (?:slide|layout|template)|this template|how to use)", re.I)
 MEDIA_FILLER = re.compile(r"вставить|вставьте|insert|qr[- ]?(code|код)?$|^qr|фото$|photo|логотип|logo|иллюстрац", re.I)
 
 
@@ -73,6 +79,8 @@ def _signature_groups(texts: list[Element], slide_w: int) -> list[list[Element]]
                 continue
             if abs(ref.box.w - t.box.w) > max(0.08 * max(ref.box.w, t.box.w), 0.01 * slide_w):
                 continue
+            if ref.placeholder and t.placeholder and max(ref.box.h, t.box.h) > 2 * max(min(ref.box.h, t.box.h), 1):
+                continue  # placeholder frames are fixed: a header strip and a tall body are not the same item
             g.append(t)
             placed = True
             break
@@ -328,6 +336,54 @@ def _containers(slots: list[Slot], elements: list[Element], slide_w: int, slide_
     return out
 
 
+def _stacked_frames(slots: list[Slot]) -> None:
+    """A card-sized frame that contains the next text frame of the same item (title box
+    spanning the whole card, body box inside it) only owns the space above that frame:
+    its box and capacity are cut there, so a long heading cannot run into the body."""
+    groups: dict[int, list[Slot]] = {}
+    for s in slots:
+        if s.kind == "text" and s.item_index is not None and not s.para_roles:
+            groups.setdefault(s.item_index, []).append(s)
+    for group in groups.values():
+        for a in group:
+            below = [b for b in group if b is not a and a.box.y < b.box.y < a.box.b
+                     and min(a.box.r, b.box.r) - max(a.box.x, b.box.x) > 0.5 * min(a.box.w, b.box.w)]
+            if not below:
+                continue
+            h = min(b.box.y for b in below) - a.box.y
+            if h > 0:
+                a.box = Box(x=a.box.x, y=a.box.y, w=a.box.w, h=h)
+                a.max_chars, a.max_lines = estimate_capacity(a.box, a.style.size or 12.0)
+                a.autofit = False
+
+
+def _backdrops(slots: list[Slot], elements: list[Element], slide_w: int, slide_h: int) -> dict[str, int]:
+    """Filled badge behind a title or subtitle, sized to the example's words (a plate the
+    text starts on, narrower than the text frame). The builder resizes it to the new text,
+    otherwise a longer title runs off its badge."""
+    out: dict[str, int] = {}
+    tol = int(0.02 * slide_w)
+    for s in slots:
+        if s.kind != "text" or s.item_index is not None or s.role not in (SlotRole.title, SlotRole.subtitle):
+            continue
+        best = None
+        for d in elements:
+            if d.kind != "decor" or not d.fill_hex or d.text.strip():
+                continue
+            b = d.box
+            if b.w >= 0.9 * s.box.w or not 0.6 * s.box.h <= b.h <= 3 * s.box.h:
+                continue  # full-width bars and cards are not badges
+            if min(b.b, s.box.b) - max(b.y, s.box.y) < 0.8 * min(b.h, s.box.h):
+                continue  # must cover the text band
+            if not (s.box.x - 3 * tol <= b.x <= s.box.x + tol and b.r > s.box.x + 2 * tol):
+                continue  # must start where the text starts
+            if best is None or b.area < best.box.area:
+                best = d
+        if best is not None:
+            out[s.id] = best.shape_id
+    return out
+
+
 def build_pattern(
     pid: str,
     elements: list[Element],
@@ -448,7 +504,9 @@ def build_pattern(
     if kind in COVER_KINDS and repeaters:
         title_slot = next((s for s in slots if s.role == SlotRole.title), None)
         repeaters = _cover_cleanup(slots, repeaters, title_slot, slide_h)
+    _stacked_frames(slots)
     containers = _containers(slots, elements, slide_w, slide_h)
+    backdrops = _backdrops(slots, elements, slide_w, slide_h) if source == "slide" else {}
     text_cap = sum(s.max_chars for s in slots if s.kind == "text" and s.role != SlotRole.title)
     covered = sum(min(e.box.area, slide_w * slide_h) for e in elements if e.kind in ("text", "picture", "table", "chart"))
     return Pattern(
@@ -462,6 +520,7 @@ def build_pattern(
         slots=slots,
         repeaters=repeaters,
         containers=containers,
+        backdrops=backdrops,
         dark=dark,
         text_capacity=text_cap,
         has_picture_slot=any(s.role == SlotRole.image for s in slots),
@@ -488,12 +547,19 @@ def classify(elements, slots, repeaters, title, layout_name, slide_index, slide_
     small_pics = [p for p in pics if p.is_icon]
     if len(pics) >= 30 and len(small_pics) >= 0.7 * len(pics):
         return PatternKind.guide, f"icon library: {len(small_pics)} small pictures", ["icons"], 0.0
+    if len(pics) >= 10 and len(texts) < 0.5 * len(pics) and all(p.box.area < 0.03 * area for p in pics):
+        # logo wall / asset sheet: its pictures are sample content that must not reach a deck
+        return PatternKind.guide, f"asset sheet: {len(pics)} small pictures, {len(texts)} texts", ["assets"], 0.0
     mono = [e for e in texts if e.is_mono and re.search(r"[{};:]", e.text)]
     if mono:
         return PatternKind.guide, "code sample block (monospace)", ["code"], 0.0
     swatches = [e for e in elements if e.kind == "decor" and e.fill_hex and e.box.w < 0.12 * slide_w and abs(e.box.w - e.box.h) < 0.02 * slide_w]
     if len({s.fill_hex for s in swatches}) >= 6 and re.search(r"цвет|color|палитр|шрифт|font", all_text, re.I):
         return PatternKind.guide, "palette/typography specimen", ["palette"], 0.0
+    # instructions addressed to the template user ("используй слайд 7", "replace this text")
+    instr = set(m.lower() for m in INSTRUCTION_RE.findall(all_text))
+    if len(instr) >= 2 and len(all_text) > 80:
+        return PatternKind.guide, f"instructions to the template user ({', '.join(sorted(instr)[:3])})", ["instructions"], 0.0
 
     n_items = repeaters[0].n_items if repeaters else 0
     has_table = any(s.role == SlotRole.table for s in slots)
@@ -550,11 +616,11 @@ def classify(elements, slots, repeaters, title, layout_name, slide_index, slide_
         return PatternKind.title, "title-slide layout name / cover keywords", tags, 1.0
     if few and (slide_index == 0 or _kw("title", f"{lname} {title_text}")) and title is not None:
         if opening or person_slots or "назван" in title_text.lower():
-            return PatternKind.title, "opening slide with large title and few elements", tags, 1.0
+            return PatternKind.title, "opening slide with large title and few elements", tags, 0.85
     if few and (_kw("section", key) or (title is not None and title_size >= 30 and not body_slots and not big_pic)):
         return PatternKind.section, "large title with no content blocks", tags, 1.0
     if few and title is not None and slide_index is not None and slide_index <= 1:
-        return PatternKind.title, "first slide", tags, 1.0
+        return PatternKind.title, "first slide", tags, 0.8
 
     if n_items >= 2:
         rep = repeaters[0]

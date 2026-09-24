@@ -85,8 +85,18 @@ def template_capabilities(profile: TemplateProfile) -> tuple[str, int]:
         ns = sorted(n for n in ns if n)
         lines.append(f"- {k}" + (f": {', '.join(map(str, ns))} элементов" if ns else ""))
     lines.append("- chart, table: строятся нативно в стиле шаблона (из данных)")
-    titles = sorted(s.max_chars for p in profile.usable_patterns() for s in p.slots
-                    if s.role.value == "title" and p.kind.value not in ("title", "section", "thanks") and s.max_chars)
+    titles = []
+    for p in profile.usable_patterns():
+        if p.kind.value in ("title", "section", "thanks"):
+            continue
+        li = profile.layouts[p.layout_index] if p.layout_index is not None and 0 <= p.layout_index < len(profile.layouts) else None
+        for s in p.slots:
+            if s.role.value == "title" and s.max_chars:
+                k = 1.0  # titles are cut short where background art sits in the title band
+                if li is not None and li.title_clear is not None and s.box.r > li.title_clear.r and s.box.w:
+                    k = max(li.title_clear.r - s.box.x, 0) / s.box.w
+                titles.append(int(s.max_chars * k))
+    titles.sort()
     budget = titles[len(titles) // 2] if titles else 70
     return "\n".join(lines), max(40, min(budget, 90))
 
@@ -143,7 +153,8 @@ def _to_spec(i: int, o: OutlineSlide, w: WrittenSlide | None) -> SlideSpec:
         if not spec.bullets:
             spec.bullets = [spec.message] if spec.message else []
     if spec.intent == PatternKind.text and not spec.bullets:
-        spec.bullets = [f"{it.title}: {it.text}".strip(": ") for it in spec.items] or ([o.message] if o.message else [])
+        spec.bullets = [f"{' '.join(x for x in (it.value, it.title) if x)}: {it.text}".strip(": ") for it in spec.items] \
+            or ([o.message] if o.message else [])
     return _keep_relevant(spec)
 
 

@@ -78,6 +78,15 @@ async def _emit(cb: Emit | None, **ev) -> None:
 # ----------------------------------------------------------------------------
 # Variant-level plan transforms (deterministic)
 # ----------------------------------------------------------------------------
+def _bullet_item(b: str) -> Item:
+    """'Head: details' becomes a titled card; a head too long for a card title is not cut
+    mid-word, the whole bullet stays the card text."""
+    head, sep, rest = b.partition(":")
+    if sep and rest.strip() and len(head.strip()) <= 40:
+        return Item(title=head.strip(), text=rest.strip(), icon=b)
+    return Item(title="", text=b.strip(), icon=b)
+
+
 def apply_variant(plan: DeckPlan, v: Variant) -> DeckPlan:
     p = plan.model_copy(deep=True)
     slides = p.slides
@@ -93,7 +102,7 @@ def apply_variant(plan: DeckPlan, v: Variant) -> DeckPlan:
     if v.prefer_icons:
         for s in slides:  # short bullet lists become icon cards
             if s.intent == PatternKind.text and 3 <= len(s.bullets) <= 5 and all(len(b.split()) <= 14 for b in s.bullets) and not s.items:
-                s.items = [Item(title=b.split(":")[0][:40] if ":" in b else "", text=b.split(":", 1)[-1].strip(), icon=b) for b in s.bullets]
+                s.items = [_bullet_item(b) for b in s.bullets]
                 s.intent = PatternKind.cards
     for s in slides:
         s.bullets = s.bullets[: v.max_bullets]
@@ -144,7 +153,8 @@ class Pipeline:
 
     # ---- after Enter ---------------------------------------------------------
     async def run(self, profile: TemplateProfile, corpus: ContentCorpus, brief: Brief, variants: list[str] | None = None,
-                  emit: Emit | None = None, run_id: str | None = None) -> RunResult:
+                  emit: Emit | None = None, run_id: str | None = None, plan: DeckPlan | None = None) -> RunResult:
+        """Brief + content -> variants. A ready `plan` (e.g. an approved outline) skips the planning step."""
         t0 = time.time()
         run_id = run_id or time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
         rdir = self.cfg.workspace / "runs" / run_id
@@ -154,7 +164,10 @@ class Pipeline:
         names = variants or self.cfg.pipeline.variants
         await _emit(emit, stage="plan", status="start", t=0)
         async with LLMClient(self.cfg.llm, telemetry=self.telemetry, transport=self.transport) as llm:
-            plan, mode = await make_plan(brief, corpus, profile, llm, self.agent)
+            if plan is None:
+                plan, mode = await make_plan(brief, corpus, profile, llm, self.agent)
+            else:
+                mode = "given"
             timings["plan"] = round(time.time() - t0, 2)
             (rdir / "plan.json").write_text(plan.model_dump_json(indent=1), encoding="utf-8")
             await _emit(emit, stage="plan", status="done", t=timings["plan"], mode=mode, slides=len(plan.slides),

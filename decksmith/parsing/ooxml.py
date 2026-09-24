@@ -518,3 +518,17 @@ def effective_background(slide, theme: Theme) -> str:
         if h:
             return h
     return theme.scheme("bg1") or "FFFFFF"
+
+
+_FILLS = ("solidFill", "gradFill", "blipFill", "pattFill")
+
+
+def paints(el) -> bool:
+    """Does a shape paint anything by itself: a fill, an outline or a theme style fill?"""
+    sp_pr = el.find(qn("p:spPr"))
+    for c in sp_pr if sp_pr is not None else []:
+        name = etree.QName(c).localname
+        if name in _FILLS or (name == "ln" and any(etree.QName(x).localname in _FILLS for x in c)):
+            return True
+    ref = el.find(qn("p:style") + "/" + qn("a:fillRef"))
+    return ref is not None and ref.get("idx", "0") != "0"

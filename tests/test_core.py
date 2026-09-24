@@ -57,3 +57,49 @@ def test_skills_registry_and_rendering():
         context="ctx", language="ru", title_chars=60,
     )
     assert "12" in user and "ctx" in user
+
+
+def test_font_download_is_time_bounded(monkeypatch):
+    """No network (or a slow one) must never stall template analysis: one failed request
+    switches downloads off for a while."""
+    import time
+
+    import httpx
+
+    from decksmith.core import fonts
+
+    calls = []
+
+    class Offline(httpx.BaseTransport):
+        def handle_request(self, request):
+            calls.append(str(request.url))
+            raise httpx.ConnectTimeout("offline")
+
+    real_client = httpx.Client
+    monkeypatch.setattr(fonts.httpx, "Client", lambda **kw: real_client(transport=Offline(), **kw))
+    monkeypatch.setattr(fonts, "_NET_DOWN_UNTIL", 0.0)
+    t0 = time.monotonic()
+    assert not fonts.try_download_google_font("Some Open Family")
+    assert not fonts.try_download_google_font("Another Open Family")
+    assert len(calls) == 1 and time.monotonic() - t0 < 2
+    assert fonts.split_weight("Montserrat Medium") == ("Montserrat", "medium")
+    assert fonts.split_weight("Open Sans Extra Bold") == ("Open Sans", "extrabold")
+    assert fonts.split_weight("Open Sans") == ("Open Sans", None)
+
+
+def test_render_timeout_kills_process_group():
+    """A hung renderer whose children keep running must not block past its timeout."""
+    import subprocess
+    import sys
+    import time
+
+    import pytest
+
+    from decksmith.render.soffice import _run
+
+    if sys.platform.startswith("win"):
+        pytest.skip("POSIX process groups")
+    t0 = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        _run(["/bin/sh", "-c", "sleep 30 & sleep 30"], 1)
+    assert time.monotonic() - t0 < 5

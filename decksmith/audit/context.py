@@ -46,6 +46,17 @@ class SlideFacts:
             return Box(x=e.box.x, y=e.box.y, w=e.box.w, h=m.height_emu)
         return e.box
 
+    def glyph_box(self, e: Element) -> Box:
+        """Where the text lines actually are: the measured height placed by the frame's vertical
+        anchor (text spilling out of a fixed frame still renders, so the full height counts)."""
+        if e.kind != "text" or not e.style:
+            return e.box
+        h = self._measure(e).height_emu
+        if e.autofit and h > e.box.h:
+            return Box(x=e.box.x, y=e.box.y, w=e.box.w, h=h)
+        y = e.box.y if e.anchor == "t" else (e.box.b - h if e.anchor == "b" else e.box.y + (e.box.h - h) // 2)
+        return Box(x=e.box.x, y=y, w=e.box.w, h=max(h, 1))
+
     def text_extent(self, e: Element) -> Box:
         """Area actually covered by glyphs (for fill ratio)."""
         if e.kind != "text" or not e.style:

@@ -195,6 +195,9 @@ class Slot(BaseModel):
     # composite text boxes ("Заголовок\nТекст" with different styles per paragraph)
     para_roles: list[SlotRole] = Field(default_factory=list)
     para_styles: list[TextStyle] = Field(default_factory=list)
+    # the layout placeholder under this slot paints a fill/outline; some renderers (LibreOffice)
+    # draw it even when the slot is removed from the slide, so leaving it unused shows an empty card
+    painted: bool = False
 
 
 class Repeater(BaseModel):
@@ -219,6 +222,7 @@ class Pattern(BaseModel):
     slots: list[Slot] = Field(default_factory=list)
     repeaters: list[Repeater] = Field(default_factory=list)
     containers: dict[str, list[int]] = Field(default_factory=dict)  # slot id -> decor shape ids framing it
+    backdrops: dict[str, int] = Field(default_factory=dict)  # title slot id -> badge shape sized to the example's text
     dark: bool = False
     text_capacity: int = 0  # total chars
     has_picture_slot: bool = False
@@ -234,6 +238,7 @@ class LayoutInfo(BaseModel):
     master_index: int
     name: str
     placeholders: list[dict[str, Any]] = Field(default_factory=list)
+    painted_idx: list[int] = Field(default_factory=list)  # content placeholders that paint a fill/outline
     dark: bool = False
     has_title: bool = False
     body_count: int = 0
@@ -243,6 +248,7 @@ class LayoutInfo(BaseModel):
     content_box: Box | None = None  # free area (CV occupancy on rendered empty layout)
     content_bg_hex: str | None = None  # rendered colour under the content area
     textured: bool = False  # busy background (photo/texture): content goes on a plate
+    title_clear: Box | None = None  # title frame shortened to stay clear of background art (e.g. logo strip)
     background_hex: str | None = None
     thumbnail: str | None = None
 

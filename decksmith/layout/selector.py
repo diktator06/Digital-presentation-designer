@@ -89,7 +89,7 @@ class Candidate:
 
 
 def score_pattern(p: Pattern, spec: SlideSpec, variant: Variant, used: dict[str, int], prev: str | None,
-                  has_image: bool = False) -> Candidate | None:
+                  has_image: bool = False, slide_area: int = 0) -> Candidate | None:
     compat = COMPAT.get(spec.intent, {spec.intent: 1.0})
     w = compat.get(p.kind)
     if w is None or p.kind == K.guide or p.score_hint < 0.2:
@@ -108,7 +108,8 @@ def score_pattern(p: Pattern, spec: SlideSpec, variant: Variant, used: dict[str,
         if p.n_items == need:
             s += 1.2
             why.append(f"items {need}=={p.n_items}")
-        elif p.n_items > need and _removable(p) and p.n_items - need <= 2 and need >= 2:
+        elif p.n_items > need and _removable(p) and p.n_items - need <= 2 and need >= 2 and p.source == "slide":
+            # (layout-only patterns cannot hide items: renderers still draw the layout's empty frames)
             s += 0.2
             keep = need
             why.append(f"items {need}<{p.n_items} (hide {p.n_items - need})")
@@ -128,6 +129,23 @@ def score_pattern(p: Pattern, spec: SlideSpec, variant: Variant, used: dict[str,
         if spec.intent == K.stats and SlotRole.number not in roles and not comp:
             s -= 1.0
             why.append("no number slot")
+        first = [sl for sl in p.slots if sl.item_index == 0 and sl.kind == "text"]
+        # item titles far longer than the template's title slot would be shrunk to unreadable
+        caps = [sl.max_chars for sl in first if sl.role == SlotRole.item_title and not sl.para_roles and sl.max_chars]
+        longest = max(len(i.title) for i in spec.items)
+        if caps and longest > 1.3 * max(caps):
+            s -= min(2.0, (longest / max(caps) - 1.3) * 1.5)
+            why.append(f"item titles {longest}>{max(caps)} chars")
+        # big per-item slots that this content leaves empty (value labels without values, ...)
+        has_values = any(i.value for i in spec.items)
+        empty = [sl for sl in first if not sl.para_roles and (
+            (sl.role == SlotRole.label and not has_values) or (sl.role == SlotRole.item_text and not has_texts
+                                                               and any(x.role == SlotRole.item_title for x in first)))]
+        total = sum(sl.box.area for sl in first) or 1
+        share = sum(sl.box.area for sl in empty) / total
+        if share > 0.3:
+            s -= 1.5 * share
+            why.append(f"item slots left empty {share:.0%}")
     # free slots that the spec cannot fill leave holes after deletion
     fillable = {SlotRole.title, SlotRole.table, SlotRole.chart, SlotRole.icon, SlotRole.image, SlotRole.decor}
     if spec.subtitle or spec.message:
@@ -140,6 +158,33 @@ def score_pattern(p: Pattern, spec: SlideSpec, variant: Variant, used: dict[str,
     if holes:
         s -= 0.25 * len(holes)
         why.append(f"{len(holes)} unfilled")
+    # slots left empty on painted layout placeholders show as empty cards in some renderers
+    painted = [sl for sl in p.slots if sl.painted]
+    if painted and slide_area:
+        n_items = keep if keep is not None else (need if p.kind in ITEM_KINDS else 0)
+        has_values = any(i.value for i in spec.items)
+        has_texts = any(i.text for i in spec.items) or bool(spec.bullets)
+
+        def unused(sl) -> bool:
+            if sl.kind == "picture":
+                return not has_image
+            if sl.item_index is not None:
+                return (sl.item_index >= n_items or (sl.role == SlotRole.label and not has_values)
+                        or (sl.role == SlotRole.item_text and not has_texts))
+            return sl.role not in fillable
+
+        share = sum(sl.box.area for sl in painted if unused(sl)) / slide_area
+        if share > 0.01:
+            s -= min(3.0, 12.0 * share)
+            why.append(f"empty painted frames {share:.0%}")
+    # photo frames stay empty (and are removed) without an image: the freed area is a hole too
+    if not has_image and slide_area:
+        pic = sum(sl.box.area for sl in p.slots if sl.kind == "picture" and sl.role == SlotRole.image
+                  and sl.box.area > 0.04 * slide_area)
+        if pic:
+            share = min(pic / slide_area, 1.0)
+            s -= min(3.0, 10.0 * share)
+            why.append(f"empty photo area {share:.0%}")
     # text capacity vs content
     chars = spec_chars(spec) * variant.text_density
     cap = max(p.text_capacity, 1)
@@ -175,11 +220,17 @@ def compose_candidates(spec: SlideSpec, variant: Variant, has_image: bool = Fals
         return (len(lst) - lst.index(name)) * 0.35 if name in lst else 0.0
 
     if spec.chart and spec.chart.series:
-        out.append(Candidate(3.2 + pref_bonus(data_pref, "chart"), "compose:chart", None, None, ["native chart from data"]))
+        data = [Candidate(3.2 + pref_bonus(data_pref, "chart"), "compose:chart", None, None, ["native chart from data"])]
         if len(spec.chart.categories) <= 7:
-            out.append(Candidate(2.6 + pref_bonus(data_pref, "table"), "compose:table", None, None, ["chart data as table"]))
+            data.append(Candidate(2.6 + pref_bonus(data_pref, "table"), "compose:table", None, None, ["chart data as table"]))
         if len(spec.chart.series) == 1 and len(spec.chart.categories) <= 4:
-            out.append(Candidate(2.5 + pref_bonus(data_pref, "kpi"), "compose:kpi", None, None, ["few values as KPI tiles"]))
+            data.append(Candidate(2.5 + pref_bonus(data_pref, "kpi"), "compose:kpi", None, None, ["few values as KPI tiles"]))
+        # the variant's first available representation of series data wins (its identity)
+        first = next((c for name in data_pref for c in data if c.mode == f"compose:{name}"), None)
+        if first is not None:
+            first.score += 1.0
+            first.why.append("variant's data view")
+        out += data
     if spec.table and spec.table.rows:
         out.append(Candidate(3.3 + pref_bonus(data_pref, "table"), "compose:table", None, None, ["native table"]))
     if spec.items:
@@ -198,7 +249,7 @@ def compose_candidates(spec: SlideSpec, variant: Variant, has_image: bool = Fals
     if spec.intent == K.quote and spec.quote:
         out.append(Candidate(2.6, "compose:quote", None, None, ["large quote in template type"]))
     if spec.intent in (K.section, K.thanks, K.title):
-        out.append(Candidate(1.4, "compose:section", None, None, ["divider composed in template type"]))
+        out.append(Candidate(1.0, "compose:section", None, None, ["divider composed in template type"]))
     return out
 
 
@@ -232,7 +283,7 @@ def select_layouts(plan: DeckPlan, profile: TemplateProfile, variant: Variant,
         has_image = spec.id in images
         cands: list[Candidate] = []
         for p in patterns:
-            c = score_pattern(p, spec, variant, used, prev, has_image)
+            c = score_pattern(p, spec, variant, used, prev, has_image, profile.tokens.slide_w * profile.tokens.slide_h)
             if c:
                 cands.append(c)
         comp = compose_candidates(spec, variant, has_image)
@@ -244,6 +295,8 @@ def select_layouts(plan: DeckPlan, profile: TemplateProfile, variant: Variant,
         taken = avoid.get(spec.id, set()) if spec.intent not in (K.title, K.thanks) else set()  # one brand cover
         if taken and len(cands) > 1:
             for c in cands:
+                if (spec.chart or spec.table) and c.pattern is None:
+                    continue  # how data is drawn is each variant's own preference (represent.data)
                 if _key(c) in taken:
                     c.score -= 1.3
                     c.why.append("taken by another variant")

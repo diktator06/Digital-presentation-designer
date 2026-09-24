@@ -47,18 +47,25 @@ class Style:
     tokens: DesignTokens
     bg: str  # background of the slide being composed
     dark: bool
+    bg_samples: tuple[str, ...] = ()  # other rendered colours under the content (gradients)
+
+    def _readable(self, c: str, ratio: float = 4.5) -> bool:
+        return all(contrast_ratio(c, b) >= ratio for b in (self.bg, *self.bg_samples))
 
     @property
     def text(self) -> str:
         t = self.tokens.text_hex
-        if contrast_ratio(t, self.bg) >= 4.5:
+        if self._readable(t):
             return t
         return readable_on(self.bg, [c.hex for c in self.tokens.palette[:8]] + ["FFFFFF", "000000"])
 
     @property
     def muted(self) -> str:
-        m = mix(self.text, self.bg, 0.35)
-        return m if contrast_ratio(m, self.bg) >= 4.5 else self.text
+        for t in (0.35, 0.2):
+            m = mix(self.text, self.bg, t)
+            if self._readable(m):
+                return m
+        return self.text
 
     @property
     def accent(self) -> str:
@@ -80,11 +87,18 @@ class Style:
         return mix(self.bg, self.accent, 0.08) if not self.dark else mix(self.bg, "FFFFFF", 0.10)
 
     def series(self, i: int) -> str:
-        cols = self.tokens.chart_colors or [self.accent]
-        if i < len(cols):
-            return cols[i]
-        base = cols[i % len(cols)]
-        return mix(base, self.bg, 0.45)
+        """i-th series colour: the template's chart palette without colours that vanish on
+        this slide's background or duplicate an earlier series; extra series get shades
+        pulled towards the text colour, so they stay visible."""
+        pool: list[str] = []
+        for c in self.tokens.chart_colors or []:
+            if contrast_ratio(c, self.bg) >= 1.5 and all(color_distance(c, p) > 100 for p in pool):
+                pool.append(c)
+        if not pool:
+            pool = [self.accent_text]
+        if i < len(pool):
+            return pool[i]
+        return mix(pool[i % len(pool)], self.text, 0.5 if i < 2 * len(pool) else 0.75)
 
     @property
     def heading_font(self) -> str:
@@ -448,18 +462,30 @@ def draw_cards(slide, box: Box, items: list[Item], st: Style, icons: list[str | 
                      color=on_card.accent_text, bold=True,
                      size=snap_down(min(st.size("number"), vh / 12700 / 1.25), st.tokens.type_scale.sizes), name="Card value")
             y += vh
-        th = int((c.b - y) * (0.38 if it.text else 0.9))
-        add_text(slide, Box(x=c.x + pad, y=y, w=c.w - 2 * pad, h=th), [it.title or it.value], on_card, role="subtitle",
-                 bold=True, name="Card title")
-        if it.text:
-            add_text(slide, Box(x=c.x + pad, y=y + th, w=c.w - 2 * pad, h=c.b - y - th - pad), [it.text], on_card,
-                     role="body", color=on_card.muted, name="Card text")
+        head = it.title or it.value
+        w = c.w - 2 * pad
+        if not it.text:
+            add_text(slide, Box(x=c.x + pad, y=y, w=w, h=int((c.b - y) * 0.9)), [head], on_card, role="subtitle",
+                     bold=True, name="Card title")
+            continue
+        # the heading takes the lines it needs (at most 40% of the room), the text starts right below it
+        rest = c.b - y - pad
+        allowed = st.tokens.type_scale.sizes
+        start = min(st.size("subtitle"), st.size("body") * 1.3)
+        size = fit_font_size([head], st.heading_font, start, w, int(rest * 0.4), True, 0.6, allowed + [start]) \
+            or snap_down(start * 0.6, allowed)
+        th = min(measure([head], st.heading_font, size, w, True).height_emu, int(rest * 0.4))
+        add_text(slide, Box(x=c.x + pad, y=y, w=w, h=th), [head], on_card, role="subtitle", bold=True, size=size,
+                 fit=False, name="Card title")
+        gap = int(pad * 0.4)
+        add_text(slide, Box(x=c.x + pad, y=y + th + gap, w=w, h=max(rest - th - gap, 1)), [it.text], on_card,
+                 role="body", color=on_card.muted, name="Card text")
 
 
 def draw_quote(slide, box: Box, quote: str, author: str, st: Style):
     mark_h = int(box.h * 0.22)
     add_text(slide, Box(x=box.x, y=box.y, w=int(box.w * 0.2), h=mark_h), ["«"], st, role="number", color=st.accent_text,
-             bold=True, size=min(st.size("number") * 1.4, mark_h / 12700), fit=False, name="Quote mark")
+             bold=True, size=min(st.size("number") * 1.4, mark_h / 12700 / 1.3), fit=False, name="Quote mark")
     qh = int(box.h * 0.55)
     add_text(slide, Box(x=box.x, y=box.y + mark_h, w=int(box.w * 0.85), h=qh), [quote], st, role="subtitle",
              size=st.size("title") * 0.85, name="Quote")

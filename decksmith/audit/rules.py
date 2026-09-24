@@ -99,27 +99,36 @@ def out_of_bounds(ctx):
 
 @check("layout.overlap", "layout", "Два блока наложились друг на друга", fixer="shrink_text")
 def overlap(ctx):
+    """Colliding text lines / objects are an error; frames that only overlap (lines apart) are a
+    layout-hygiene warning. Both are template design when the frames sit exactly where the
+    template example put them and the text did not grow them."""
     out = []
     for sf in ctx.slides:
-        blocks = [(e, sf.effective_box(e)) for e in sf.content]
+        # text is compared where its lines are (a card-sized frame may contain another by design)
+        blocks = [(e, sf.glyph_box(e) if e.kind == "text" else sf.effective_box(e)) for e in sf.content]
         for i in range(len(blocks)):
             for j in range(i + 1, len(blocks)):
-                (a, ba), (b, bb) = blocks[i], blocks[j]
-                if set(a.group_path) & set(b.group_path) and a.kind == b.kind == "text" and False:
+                (a, ga), (b, gb) = blocks[i], blocks[j]
+                frames = a.box.intersection(b.box) > 0.08 * (min(a.box.area, b.box.area) or 1)
+                lines = ga.intersection(gb) > 0.08 * (min(ga.area, gb.area) or 1)
+                if not frames and not lines:
                     continue
-                inter = ba.intersection(bb)
-                small = min(ba.area, bb.area) or 1
-                if inter > 0.08 * small:
-                    # frames that overlap in the template example itself are a template design choice;
-                    # overlap caused by our longer text growing a frame is a real defect
-                    raw_overlap = a.box.intersection(b.box) > 0.08 * (min(a.box.area, b.box.area) or 1)
-                    inh = raw_overlap and inherited_geometry(ctx, sf, a) and inherited_geometry(ctx, sf, b) \
-                        and ba.area <= a.box.area * 1.05 and bb.area <= b.box.area * 1.05
-                    out.append(issue("layout.overlap", sf.index,
-                                     f"«{a.text[:30] or a.kind}» перекрывает «{b.text[:30] or b.kind}»" + (" (так в шаблоне)" if inh else ""),
-                                     boxes=[ba, bb], shape_ids=[a.shape_id, b.shape_id],
-                                     severity=Severity.info if inh else Severity.error,
-                                     data={"ratio": round(inter / small, 2), "inherited": inh}))
+                inherited = inherited_geometry(ctx, sf, a) and inherited_geometry(ctx, sf, b)
+                grown = not (a.box.contains(ga, tol=12700) and b.box.contains(gb, tol=12700))
+                if lines:
+                    inh = frames and inherited and not grown
+                    sev, what = (Severity.info if inh else Severity.error), " (так в шаблоне)" if inh else ""
+                elif inherited:
+                    continue  # frames nest by template design, the lines themselves are apart
+                else:
+                    sev, what = Severity.warning, " (рамки; строки не пересекаются)"
+                inter = (ga if lines else a.box).intersection(gb if lines else b.box)
+                small = min((ga if lines else a.box).area, (gb if lines else b.box).area) or 1
+                out.append(issue("layout.overlap", sf.index,
+                                 f"«{a.text[:30] or a.kind}» перекрывает «{b.text[:30] or b.kind}»" + what,
+                                 boxes=[ga, gb] if lines else [a.box, b.box], shape_ids=[a.shape_id, b.shape_id],
+                                 severity=sev, data={"ratio": round(inter / small, 2), "inherited": sev == Severity.info,
+                                                     "lines": lines}))
     return out
 
 
@@ -561,7 +570,7 @@ def _norm_words(s: str) -> list[str]:
 
 
 def _present(fragment: str, haystack_words: set[str], min_hit: float = 0.6) -> bool:
-    words = [w for w in _norm_words(fragment) if len(w) > 2][:6]
+    words = [w for w in _norm_words(fragment) if len(w) > 2 or any(ch.isdigit() for ch in w)][:6]
     if not words:
         return True
     return sum(w in haystack_words for w in words) / len(words) >= min_hit
@@ -612,6 +621,7 @@ def content_lost(ctx):
         spec = ctx.plan.slides[sf.index]
         frags = list(spec.bullets[:6])
         frags += [it.title or it.text or it.value for it in spec.items[:8]]
+        frags += [it.value for it in spec.items[:8] if it.value and it.title]  # KPI values are the point
         if spec.table:
             frags += [str(r[0]) for r in spec.table.rows[:6] if r]
         if spec.chart:
@@ -653,6 +663,8 @@ def numbers_sourced(ctx):
     out = []
     for sf in ctx.slides:
         for e in sf.texts:
+            if e.brand:
+                continue  # page numbers, dates, footers are not content
             for m in NUM_RE.finditer(e.text):
                 raw = m.group(0).strip()
                 digits = re.sub(r"[^\d.]", "", normalize_number(raw))

@@ -106,3 +106,23 @@ def test_no_dataset_specific_code():
             if banned.search(line):
                 hits.append(f"{p.relative_to(ROOT)}:{n}: {line.strip()[:80]}")
     assert not hits, "\n".join(hits)
+
+
+def test_layout_frames_follow_document_order(unknown_template, tmp_path):
+    """python-pptx lists slide placeholders sorted by idx: frames must still be paired with
+    their own layout counterparts when the idx order differs from the document order."""
+    from pptx import Presentation
+
+    prs = Presentation(unknown_template)
+    layout = prs.slide_layouts[3]  # title + two content columns
+    left, right = sorted([ph for ph in layout.placeholders if ph.placeholder_format.idx in (1, 2)], key=lambda p: p.left)
+    left._element.ph.set("idx", "20")
+    right._element.ph.set("idx", "13")
+    path = tmp_path / "idx_order.pptx"
+    prs.save(path)
+    prof = analyze_template(path, force=True)
+    b = DeckBuilder(prof, load_variants()["balanced"])
+    slide = b._slide_from_layout(b.layouts[3])
+    frames = {ph.placeholder_format.idx: (ph.left, ph.top, ph.width, ph.height) for ph in b.layouts[3].placeholders}
+    for ph in slide.placeholders:
+        assert (ph.left, ph.top, ph.width, ph.height) == frames[ph.placeholder_format.idx], ph.name
