@@ -103,3 +103,22 @@ def test_render_timeout_kills_process_group():
     with pytest.raises(subprocess.TimeoutExpired):
         _run(["/bin/sh", "-c", "sleep 30 & sleep 30"], 1)
     assert time.monotonic() - t0 < 5
+
+
+def test_offline_plan_meets_slide_range():
+    """Without a model the deck still has 10-15 slides (TZ) and a clean cover."""
+    from pathlib import Path
+
+    from decksmith.content.ingest import ingest
+    from decksmith.generation.planner import Brief, plan_offline
+
+    root = Path(__file__).resolve().parents[1]
+    corpus = ingest(sorted((root / "data" / "content").glob("*.md")))
+    brief = Brief(text="Цифровой дизайнер презентаций — сервис, который по брифу и контент-пакету собирает "
+                       "презентацию в фирменном шаблоне компании и сам проверяет её качество.",
+                  purpose="product", n_slides=12, language="ru")
+    plan = plan_offline(brief, corpus)
+    assert 10 <= len(plan.slides) <= 15
+    assert plan.title == "Цифровой дизайнер презентаций"
+    assert plan.subtitle.startswith("Сервис") and plan.subtitle != "product"
+    assert not any(s.title.startswith("#") or "|" in s.title for s in plan.slides)

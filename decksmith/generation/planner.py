@@ -297,15 +297,47 @@ def _short(s: str, words: int = 14) -> str:
     return s if len(w) <= words else " ".join(w[:words]).rstrip(",;:") + "…"
 
 
+_PURPOSE_RU = {"feature": "Презентация фичи", "product": "Презентация продукта", "project": "Презентация проекта",
+               "initiative": "Презентация инициативы"}
+_NUM_RE = re.compile(r"\d[\d.,]*(?:\s?[–-]\s?\d[\d.,]*)?(?:\s?(?:%|₽|(?:млн|млрд|тыс|руб|мин|сек|час|дн|раз)[а-яё]*))?")
+
+
+def _cut(s: str, n: int) -> str:
+    """At most n characters, cut at a word boundary (never mid-word)."""
+    s = s.strip()
+    if len(s) <= n:
+        return s
+    return s[:n].rsplit(" ", 1)[0].rstrip(",;:—–- ") + "…"
+
+
+def _brief_title(brief: Brief) -> tuple[str, str]:
+    """Cover title and subtitle from the brief's first phrase ('X — what it is')."""
+    text = brief.text.strip()
+    first = re.split(r"(?<=[.!?])\s+|\n", text)[0] if text else ""
+    head, sep, rest = first.partition(" — ")
+    if not sep:
+        head, sep, rest = first.partition(": ")
+    title = _cut((head if sep else first).rstrip("."), 70)
+    sub = _cut(rest.rstrip("."), 140) if sep else ""
+    return title, (sub[:1].upper() + sub[1:]) if sub else _PURPOSE_RU.get(brief.purpose, "")
+
+
 def plan_offline(brief: Brief, corpus: ContentCorpus) -> DeckPlan:
+    """Extractive fallback without a model: document sections become slides, the deck is
+    brought to 10-15 slides (TZ) by splitting long sections and adding key-number and
+    summary slides built from the same material. Nothing is invented."""
     lines = [ln.rstrip() for c in corpus.chunks for ln in c.text.split("\n")]
     sections: list[tuple[str, list[str]]] = []
     cur_title, cur = None, []
     for ln in lines:
         s = ln.strip()
-        if not s:
+        if not s or re.fullmatch(r"[|:\-\s]+", s):  # blank line / markdown table rule
             continue
-        if _HEAD_RE.match(s) and not _BULLET_RE.match(s) and len(s.split()) <= 9 and not s.endswith(":"):
+        md_head = re.match(r"^#{1,6}\s+(.+)", s)
+        if s.startswith("|"):  # markdown table row -> "cell — cell"
+            s = " — ".join(c.strip() for c in s.strip("|").split("|") if c.strip())
+        s = re.sub(r"[`*]{1,2}", "", md_head.group(1) if md_head else s)
+        if md_head or (_HEAD_RE.match(s) and not _BULLET_RE.match(s) and len(s.split()) <= 9 and not s.endswith(":")):
             if cur_title and cur:
                 sections.append((cur_title, cur))
             cur_title, cur = re.sub(r"^\d+(\.\d+)*\.?\s+", "", s), []
@@ -314,32 +346,65 @@ def plan_offline(brief: Brief, corpus: ContentCorpus) -> DeckPlan:
     if cur_title and cur:
         sections.append((cur_title, cur))
     if not sections:
-        sents = _sentences(corpus.full_text())
-        sections = [(f"Ключевой тезис {i + 1}", sents[i * 4:(i + 1) * 4]) for i in range(max(1, len(sents) // 4))]
-    # rank sections by amount of content, keep document order
-    body_n = max(3, brief.n_slides - 3)
-    ranked = sorted(range(len(sections)), key=lambda i: -sum(len(x) for x in sections[i][1]))[:body_n]
-    chosen = [sections[i] for i in sorted(ranked)]
-    title = brief.text.split("\n")[0][:80] if brief.text else (chosen[0][0] if chosen else "Презентация")
-    specs: list[SlideSpec] = [SlideSpec(id="s1", intent=PatternKind.title, title=title, subtitle=brief.purpose)]
-    if brief.n_slides >= 10 and len(chosen) >= 3:
-        specs.append(SlideSpec(id="s2", intent=PatternKind.agenda, title="Содержание",
-                               items=[Item(title=_short(t, 4)) for t, _ in chosen[:6]]))
-    for t, body in chosen:
+        sents = _sentences(corpus.full_text() or brief.text)
+        sections = [(_cut(sents[i * 4], 60), sents[i * 4 + 1:(i + 1) * 4] or sents[i * 4:i * 4 + 1])
+                    for i in range(max(1, len(sents) // 4))] if sents else []
+
+    # slide units in document order: (title, lines, lines are bullets)
+    units: list[list] = []
+    for t, body in sections:
         bullets = [_BULLET_RE.sub("", b) for b in body if _BULLET_RE.match(b)]
         sents = bullets or _sentences(" ".join(body))
-        sents = [_short(s) for s in sents][:6]
-        nums = [s for s in sents if re.search(r"\d", s)]
+        if sents:
+            units.append([t, [_short(x) for x in sents], bool(bullets)])
+    target = min(max(brief.n_slides, 10), 15)
+    agenda = len(units) >= 3
+    need = target - 2 - (1 if agenda else 0)  # cover, closing, agenda
+    if len(units) > need:  # richest sections, document order kept
+        keep = sorted(sorted(range(len(units)), key=lambda i: -len(units[i][1]))[:need])
+        units = [units[i] for i in keep]
+    all_lines = [x for u in units for x in u[1]]
+    numbers = [x for x in all_lines if re.search(r"\d", x)]
+    extra = (1 if len(numbers) >= 3 else 0) + (1 if len(units) >= 3 else 0)
+    while len(units) + extra < need:  # split the longest section in two
+        i = max(range(len(units)), key=lambda k: len(units[k][1]), default=None)
+        if i is None or len(units[i][1]) < 6:
+            break
+        t, ls, b = units[i]
+        half = (len(ls) + 1) // 2
+        # a list continues under its own heading; prose continues under its next sentence
+        second = [f"{_cut(t, 50)} (продолжение)", ls[half:], b] if b else [_cut(ls[half].rstrip("…"), 60), ls[half + 1:] or ls[half:], b]
+        units[i:i + 1] = [[t, ls[:half], b], second]
+
+    title, subtitle = _brief_title(brief)
+    title = title or (units[0][0] if units else "Презентация")
+    specs: list[SlideSpec] = [SlideSpec(id="s1", intent=PatternKind.title, title=title, subtitle=subtitle)]
+    if agenda:
+        specs.append(SlideSpec(id="s2", intent=PatternKind.agenda, title="Содержание",
+                               items=[Item(title=_short(t, 4)) for t, _, _ in units[:6]]))
+    for t, ls, is_bullets in units:
+        nums = [x for x in ls if re.search(r"\d", x)]
         sid = f"s{len(specs) + 1}"
-        if 3 <= len(bullets) <= 6:
-            items = [Item(title=_short(b, 4), text=_short(b, 12)) for b in bullets]
+        if is_bullets and 3 <= len(ls) <= 6:
+            items = [Item(title=_short(b, 4), text=_short(b, 12)) for b in ls]
             specs.append(SlideSpec(id=sid, intent=PatternKind.cards, title=t, items=items))
         elif len(nums) >= 3:
             specs.append(SlideSpec(id=sid, intent=PatternKind.text, title=t, bullets=nums[:5]))
         else:
-            specs.append(SlideSpec(id=sid, intent=PatternKind.text, title=t, bullets=sents[:5] or [t]))
+            specs.append(SlideSpec(id=sid, intent=PatternKind.text, title=t, bullets=ls[:5] or [t]))
+    if len(numbers) >= 3 and len(specs) < target - 1:
+        items = []
+        for x in numbers[:4]:
+            m = _NUM_RE.search(x)
+            value = m.group(0).strip() if m else ""
+            rest = re.sub(r"\s+([:,.;])", r"\1", re.sub(r"\s{2,}", " ", x.replace(value, "", 1))).strip(" :—–-,")
+            items.append(Item(value=value, title=_short(rest, 6), text=""))
+        specs.append(SlideSpec(id=f"s{len(specs) + 1}", intent=PatternKind.stats, title="Ключевые цифры", items=items))
+    if len(units) >= 3 and len(specs) < target - 1:
+        specs.append(SlideSpec(id=f"s{len(specs) + 1}", intent=PatternKind.text, title="Главное",
+                               bullets=[u[1][0] for u in units[:5]]))
     specs.append(SlideSpec(id=f"s{len(specs) + 1}", intent=PatternKind.thanks, title="Спасибо за внимание!"))
-    return DeckPlan(title=title, subtitle=brief.purpose, purpose=brief.purpose, language=corpus.language, slides=specs)
+    return DeckPlan(title=title, subtitle=subtitle, purpose=brief.purpose, language=corpus.language, slides=specs)
 
 
 async def make_plan(brief: Brief, corpus: ContentCorpus, profile: TemplateProfile, llm: LLMClient, agent: Agent) -> tuple[DeckPlan, str]:

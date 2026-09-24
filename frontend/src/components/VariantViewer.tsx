@@ -24,6 +24,7 @@ export default function VariantViewer({ run, variant, initialSlide, onBack, onUp
     return m
   }, [issues])
   const visible = issues.filter((i) => (!onlySlide || i.slide === slide) && (showInfo || i.severity !== 'info'))
+  const hiddenInfo = showInfo ? 0 : issues.filter((i) => (!onlySlide || i.slide === slide) && i.severity === 'info').length
   const groups = useMemo(() => {
     const g: Record<string, AuditIssue[]> = {}
     visible.forEach((i) => (g[i.category] ||= []).push(i))
@@ -126,7 +127,11 @@ export default function VariantViewer({ run, variant, initialSlide, onBack, onUp
               </button>
             </div>
           </div>
-          {visible.length === 0 && <div className="empty">Замечаний нет</div>}
+          {visible.length === 0 && (
+            <div className="empty">
+              {hiddenInfo ? `Предупреждений и ошибок нет · информационных замечаний: ${hiddenInfo} (включите «показать инфо»)` : 'Замечаний нет'}
+            </div>
+          )}
           {Object.entries(groups).map(([cat, list]) => (
             <div key={cat}>
               <div className="group-title">{CAT_RU[cat] ?? cat} · {list.length}</div>

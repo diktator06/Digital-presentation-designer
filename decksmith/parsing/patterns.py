@@ -556,6 +556,10 @@ def classify(elements, slots, repeaters, title, layout_name, slide_index, slide_
     swatches = [e for e in elements if e.kind == "decor" and e.fill_hex and e.box.w < 0.12 * slide_w and abs(e.box.w - e.box.h) < 0.02 * slide_w]
     if len({s.fill_hex for s in swatches}) >= 6 and re.search(r"цвет|color|палитр|шрифт|font", all_text, re.I):
         return PatternKind.guide, "palette/typography specimen", ["palette"], 0.0
+    codes = set(re.findall(r"(?:#|\bHEX\s*#?|\bRGB\s*)([0-9A-Fa-f]{6})\b", all_text))
+    if len(codes) >= 3:
+        # style guide: the slide documents the brand colours (swatches of any shape + their codes)
+        return PatternKind.guide, f"style guide: {len(codes)} colour codes", ["palette"], 0.0
     # instructions addressed to the template user ("используй слайд 7", "replace this text")
     instr = set(m.lower() for m in INSTRUCTION_RE.findall(all_text))
     if len(instr) >= 2 and len(all_text) > 80:

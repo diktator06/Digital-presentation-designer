@@ -7,11 +7,18 @@ export default function Templates() {
   const [overlay, setOverlay] = useState(true)
   const [kind, setKind] = useState<string>('all')
   const [uploading, setUploading] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [opening, setOpening] = useState<string | null>(null)
   const ref = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    api.templates().then(setList)
+    api.templates().then(setList).finally(() => setLoading(false))
   }, [])
+
+  const openTemplate = (id: string) => {
+    setOpening(id)
+    api.template(id).then(setSel).finally(() => setOpening(null))
+  }
 
   const upload = async (f: File | undefined) => {
     if (!f) return
@@ -119,11 +126,20 @@ export default function Templates() {
           )}
           <input ref={ref} type="file" accept=".pptx,.potx,.pptm,.ppt,.odp,.otp" hidden onChange={(e) => upload(e.target.files?.[0])} />
         </div>
+        {loading && (
+          <div className="panel" style={{ display: 'grid', placeItems: 'center', minHeight: 220 }}>
+            <span><span className="spin" /> загружаем шаблоны…</span>
+          </div>
+        )}
         {list.map((t) => (
-          <div key={t.id} className="panel tpl-card" onClick={() => api.template(t.id).then(setSel)}>
+          <div key={t.id} className="panel tpl-card" onClick={() => !opening && openTemplate(t.id)}>
             {t.thumbnail && <img src={t.thumbnail} alt="" />}
             <div className="pad col" style={{ gap: 6 }}>
-              <div className="row"><h3>{t.name}</h3><div className="spacer" /><span className="badge blue">{t.n_patterns} паттернов</span></div>
+              <div className="row">
+                <h3>{t.name}</h3>
+                <div className="spacer" />
+                {opening === t.id ? <span className="small"><span className="spin" /> открываем…</span> : <span className="badge blue">{t.n_patterns} паттернов</span>}
+              </div>
               <div className="row" style={{ gap: 4 }}>{t.palette.slice(0, 10).map((c) => <div key={c} className="swatch" style={{ background: `#${c}`, width: 16, height: 16 }} />)}</div>
               <span className="small muted">{t.fonts.heading} / {t.fonts.body} · {t.dark ? 'тёмный' : 'светлый'} · {t.slide_size_in[0]}″×{t.slide_size_in[1]}″</span>
             </div>

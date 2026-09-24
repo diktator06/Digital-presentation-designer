@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, type ContentPack, type Run, type RunEvent, type TemplateCard, type Variant } from '../api'
 import VariantViewer from '../components/VariantViewer'
 
+const LAST_RUN = 'decksmith.lastRun'
+
 const PURPOSES = [
   { id: 'feature', label: 'Фича' },
   { id: 'product', label: 'Продукт' },
@@ -51,7 +53,7 @@ export default function Generate() {
     const load = () =>
       api.templates().then((t) => {
         setTemplates(t)
-        if (!tpl && t.length) setTpl(t.find((x) => x.name.includes('tech'))?.id ?? t[0].id)
+        if (t.length) setTpl((cur) => cur || (t.find((x) => x.name.includes('tech'))?.id ?? t[0].id))
       })
     load()
     const iv = setInterval(() => templates.length === 0 && load(), 4000)
@@ -62,6 +64,25 @@ export default function Generate() {
     return () => clearInterval(iv)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [templates.length])
+
+  useEffect(() => {
+    // the service keeps runs: after a reload the last one is shown again (progress replayed)
+    let id: string | null = null
+    try {
+      id = localStorage.getItem(LAST_RUN)
+    } catch {
+      /* storage unavailable (private mode): start clean */
+    }
+    if (!id) return
+    api
+      .run(id)
+      .then((r) => {
+        setRun(r)
+        setRunId(id)
+        if (r.request?.template_id) setTpl(r.request.template_id)
+      })
+      .catch(() => {})
+  }, [])
 
   useEffect(() => {
     if (!runId) return
@@ -87,6 +108,11 @@ export default function Generate() {
   const start = async () => {
     if (!tpl || !brief.trim()) return
     const { run_id } = await api.startRun({ template_id: tpl, content_id: pack || null, brief, purpose, n_slides: nSlides })
+    try {
+      localStorage.setItem(LAST_RUN, run_id)
+    } catch {
+      /* storage unavailable: nothing to restore later */
+    }
     setRun({ id: run_id, status: 'running', started: Date.now() / 1000, template: '', events: [], request: { template_id: tpl, brief, purpose, n_slides: nSlides } })
     setNow(Date.now())
     setRunId(run_id)

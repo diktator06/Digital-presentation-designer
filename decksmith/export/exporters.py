@@ -28,8 +28,8 @@ button:hover{{background:var(--accent)}}
 .slide{{display:none;width:100%;height:100%;align-items:center;justify-content:center}}
 .slide.active{{display:flex}} .slide svg{{max-width:100%;max-height:100%;height:auto;box-shadow:0 8px 40px #0008;background:#fff}}
 .sr{{position:absolute;left:-9999px}}
-#grid{{display:none;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px;padding:16px;overflow:auto;height:calc(100vh - 44px)}}
-#grid.on{{display:grid}} #grid div{{cursor:pointer;background:#fff;border-radius:4px;overflow:hidden}} #grid svg{{width:100%;height:auto;display:block}}
+#grid{{display:none;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));align-content:start;gap:16px;padding:16px;overflow:auto;height:calc(100vh - 44px)}}
+#grid.on{{display:grid}} body.grid #stage{{display:none}} #grid div{{cursor:pointer;background:#fff;border-radius:4px;overflow:hidden}} #grid svg{{width:100%;height:auto;display:block}}
 </style></head><body>
 <header><b>{title}</b><span id="n"></span><button onclick="go(-1)">←</button><button onclick="go(1)">→</button><button onclick="toggleGrid()">Все слайды</button></header>
 <div id="stage">{slides}</div><div id="grid"></div>
@@ -37,8 +37,8 @@ button:hover{{background:var(--accent)}}
 const S=[...document.querySelectorAll('.slide')];let i=0;
 function show(k){{i=Math.max(0,Math.min(S.length-1,k));S.forEach((s,j)=>s.classList.toggle('active',j===i));document.getElementById('n').textContent=(i+1)+' / '+S.length;location.hash=i+1}}
 function go(d){{show(i+d)}}
-function toggleGrid(){{const g=document.getElementById('grid');if(!g.children.length){{S.forEach((s,j)=>{{const d=document.createElement('div');d.innerHTML=s.querySelector('svg').outerHTML;d.onclick=()=>{{g.classList.remove('on');show(j)}};g.appendChild(d)}})}}g.classList.toggle('on')}}
-document.addEventListener('keydown',e=>{{if(['ArrowRight','PageDown',' '].includes(e.key))go(1);if(['ArrowLeft','PageUp'].includes(e.key))go(-1);if(e.key==='Home')show(0);if(e.key==='End')show(S.length-1)}});
+function toggleGrid(){{const g=document.getElementById('grid');if(!g.children.length){{S.forEach((s,j)=>{{const d=document.createElement('div');d.innerHTML=s.querySelector('svg').outerHTML;d.onclick=()=>{{g.classList.remove('on');document.body.classList.remove('grid');show(j)}};g.appendChild(d)}})}}document.body.classList.toggle('grid',g.classList.toggle('on'))}}
+document.addEventListener('keydown',e=>{{if(['ArrowRight','PageDown',' '].includes(e.key))go(1);if(['ArrowLeft','PageUp'].includes(e.key))go(-1);if(e.key==='Home')show(0);if(e.key==='End')show(S.length-1);if(e.key==='Escape'&&document.body.classList.contains('grid'))toggleGrid()}});
 show((parseInt(location.hash.slice(1))||1)-1);
 </script></body></html>"""
 
