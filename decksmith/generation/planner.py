@@ -111,7 +111,7 @@ def _normalize_outline(o: Outline, brief: Brief) -> Outline:
         slides.insert(0, OutlineSlide(intent="title", title=o.title, message=o.subtitle))
     if slides[-1].intent not in ("thanks", "contacts"):
         slides.append(OutlineSlide(intent="thanks", title="Спасибо!" if brief.language == "ru" else "Thank you!"))
-    lo, hi = max(brief.n_slides - 2, 3), brief.n_slides + 2
+    hi = max(brief.n_slides, 3)  # TZ: the number of slides the user asked for
     while len(slides) > hi:  # drop from the middle, keep title/agenda/closing
         idx = next((i for i in range(len(slides) - 2, 1, -1) if slides[i].intent == "section"), len(slides) - 2)
         slides.pop(idx)
@@ -237,7 +237,7 @@ async def plan_with_llm(brief: Brief, corpus: ContentCorpus, profile: TemplatePr
     context = select_context(corpus, brief.text, budget_chars=16000)
     outline_skill = skill_for_step(agent, "outline", "outline")
     hints = outline_skill.params.get("purpose_hints", {})  # lives in skills/outline/<ver>.yaml
-    lo = max(brief.n_slides - 2, 3)
+    lo = max(brief.n_slides, 3)  # fewer slides than asked -> one repair round
 
     brief_stems = {w[:6] for w in re.findall(r"[a-zа-яё]{5,}", brief.text.lower())}
 
@@ -323,9 +323,10 @@ def _brief_title(brief: Brief) -> tuple[str, str]:
 
 
 def plan_offline(brief: Brief, corpus: ContentCorpus) -> DeckPlan:
-    """Extractive fallback without a model: document sections become slides, the deck is
-    brought to 10-15 slides (TZ) by splitting long sections and adding key-number and
-    summary slides built from the same material. Nothing is invented."""
+    """Extractive fallback without a model: document sections become slides; the deck gets
+    the number of slides the user asked for (10-15 by default, TZ) by keeping the richest
+    sections or splitting long ones and adding key-number and summary slides built from
+    the same material. Nothing is invented."""
     lines = [ln.rstrip() for c in corpus.chunks for ln in c.text.split("\n")]
     sections: list[tuple[str, list[str]]] = []
     cur_title, cur = None, []
@@ -357,8 +358,9 @@ def plan_offline(brief: Brief, corpus: ContentCorpus) -> DeckPlan:
         sents = bullets or _sentences(" ".join(body))
         if sents:
             units.append([t, [_short(x) for x in sents], bool(bullets)])
-    target = min(max(brief.n_slides, 10), 15)
-    agenda = len(units) >= 3
+    # TZ: 10-15 slides "or as many as the user asked for" -> the user's number wins
+    target = min(max(brief.n_slides, 4), 20)
+    agenda = len(units) >= 3 and target >= 8  # a short deck spends no slide on contents
     need = target - 2 - (1 if agenda else 0)  # cover, closing, agenda
     if len(units) > need:  # richest sections, document order kept
         keep = sorted(sorted(range(len(units)), key=lambda i: -len(units[i][1]))[:need])
@@ -368,8 +370,8 @@ def plan_offline(brief: Brief, corpus: ContentCorpus) -> DeckPlan:
     extra = (1 if len(numbers) >= 3 else 0) + (1 if len(units) >= 3 else 0)
     while len(units) + extra < need:  # split the longest section in two
         i = max(range(len(units)), key=lambda k: len(units[k][1]), default=None)
-        if i is None or len(units[i][1]) < 6:
-            break
+        if i is None or len(units[i][1]) < 4:
+            break  # not enough material left: fewer slides rather than invented ones
         t, ls, b = units[i]
         half = (len(ls) + 1) // 2
         # a list continues under its own heading; prose continues under its next sentence

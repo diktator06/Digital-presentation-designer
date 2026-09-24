@@ -106,7 +106,8 @@ def test_render_timeout_kills_process_group():
 
 
 def test_offline_plan_meets_slide_range():
-    """Without a model the deck still has 10-15 slides (TZ) and a clean cover."""
+    """Without a model the deck has the requested number of slides (TZ: 10-15 or as set by
+    the user) and a clean cover."""
     from pathlib import Path
 
     from decksmith.content.ingest import ingest
@@ -122,3 +123,6 @@ def test_offline_plan_meets_slide_range():
     assert plan.title == "Цифровой дизайнер презентаций"
     assert plan.subtitle.startswith("Сервис") and plan.subtitle != "product"
     assert not any(s.title.startswith("#") or "|" in s.title for s in plan.slides)
+    for n in (6, 8, 12):
+        brief.n_slides = n
+        assert len(plan_offline(brief, corpus).slides) == n, n
