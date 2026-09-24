@@ -1,7 +1,8 @@
 # The project's own pitch deck, built by DeckSmith on the hackathon template.
 # The outline is given (docs/pitch/pitch_plan.json), so no model is needed; the
-# project docs are the content pack, so the audit checks every number on the
-# slides against them.  Put «ЛЦТ2026 Шаблон презентации.pptx» into data/templates/:
+# project docs and the team description (docs/pitch/team.md) are the content pack,
+# so the audit checks every number on the slides against them.
+# Put «ЛЦТ2026 Шаблон презентации.pptx» into data/templates/:
 #   decksmith run configs/pitch.yaml
 templates:
   - data/templates/lct2026.pptx
@@ -11,9 +12,11 @@ content:
   - MODELS.md
   - docs/STRESS_RESULTS.md
   - docs/UNIVERSALITY.md
+  - docs/pitch/team.md
 brief:
   text: >
-    Питч решения DeckSmith для задачи №4 VK Tech «Цифровой дизайнер презентаций»:
+    Питч решения DeckSmith команды Часыгова Мовсара (капитан, Fullstack / AI Engineer) и
+    Арсамаковой Хавы (UI/UX дизайнер) для задачи №4 VK Tech «Цифровой дизайнер презентаций»:
     сервис по брифу и контент-пакету собирает презентацию в любом фирменном шаблоне
     и сам проверяет её качество.
   purpose: product
