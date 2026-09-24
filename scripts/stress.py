@@ -27,6 +27,8 @@ def run_one(template: str, out_dir: str, plan_path: str) -> dict:
     import os
 
     os.environ.setdefault("DECKSMITH_LLM_PROVIDER", "offline")
+    # own cache: stress templates must not appear in the service's template list
+    os.environ.setdefault("DECKSMITH_WORKSPACE", str(Path(out_dir) / "_workspace"))
     from PIL import Image, ImageDraw
 
     from decksmith.audit.context import AuditContext

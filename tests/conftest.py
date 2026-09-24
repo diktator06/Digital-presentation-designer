@@ -4,9 +4,10 @@ from pathlib import Path
 
 import pytest
 
-os.environ.setdefault("DECKSMITH_LLM_PROVIDER", "offline")  # tests never call a model
-
 ROOT = Path(__file__).resolve().parents[1]
+os.environ.setdefault("DECKSMITH_LLM_PROVIDER", "offline")  # tests never call a model
+# own cache: test templates must not appear in the service's template list
+os.environ.setdefault("DECKSMITH_WORKSPACE", str(ROOT / "workspace" / "_test"))
 TEMPLATES = sorted((ROOT / "data" / "templates").glob("*.pptx"))
 
 

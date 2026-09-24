@@ -30,7 +30,7 @@ from decksmith.generation.llm import LLMClient
 from decksmith.generation.planner import Brief
 from decksmith.generation.skills import list_versions
 from decksmith.parsing.debug import overlay
-from decksmith.parsing.template_parser import analyze_template, summarize
+from decksmith.parsing.template_parser import PARSER_VERSION, analyze_template, summarize
 from decksmith.pipeline import Pipeline
 from decksmith.render.soffice import pdf_to_pngs, pptx_to_pdf
 from decksmith.export.exporters import to_html
@@ -53,7 +53,8 @@ def _load_existing() -> None:
     for p in (WS / "templates").glob("*/profile.json"):
         try:
             prof = TemplateProfile.model_validate_json(p.read_text(encoding="utf-8"))
-            TEMPLATES[prof.id] = prof
+            if prof.parser_version == PARSER_VERSION:  # stale profiles are re-analysed on demand
+                TEMPLATES[prof.id] = prof
         except Exception:
             continue
     for p in (WS / "content").glob("*/corpus.json"):

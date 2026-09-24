@@ -36,6 +36,6 @@ pipeline:
   auto_fix: true
 
 paths:
-  workspace: workspace
+  workspace: ${DECKSMITH_WORKSPACE:-workspace}
   skills: skills
   assets: assets

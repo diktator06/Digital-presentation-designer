@@ -83,6 +83,8 @@ python scripts/stress.py <шаблоны...> --synthetic  # слепой стр�
 | `DECKSMITH_IMAGE_PROVIDER` | `none` / `openai_images` | `none` |
 | `DECKSMITH_IMAGE_BASE_URL`, `DECKSMITH_IMAGE_API_KEY`, `DECKSMITH_IMAGE_MODEL` | text-to-image | FLUX.1-schnell |
 | `DECKSMITH_SOFFICE` | путь к LibreOffice | автопоиск |
+| `DECKSMITH_WORKSPACE` | каталог кэша профилей, запусков и загрузок (тесты и стресс-тест используют свои) | `workspace` |
+| `DECKSMITH_FONT_DOWNLOAD` | `0` — не докачивать открытые шрифты из Google Fonts | `1` |
 | `DECKSMITH_CONFIG` | альтернативный YAML настроек | `config/default.yaml` |
 
 Остальные параметры (параллелизм, лимит времени, число слайдов, варианты) — в
