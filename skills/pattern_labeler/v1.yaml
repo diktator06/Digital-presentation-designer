@@ -1,0 +1,16 @@
+name: pattern_labeler
+version: v1
+description: >
+  Необязательная контекстуальная разметка шаблона (до нажатия Enter): VLM подтверждает
+  или уточняет тип композиции, найденный детерминированным парсером.
+model: vlm
+temperature: 0.0
+max_tokens: 300
+response: json
+system: |
+  Ты — дизайнер презентаций. Классифицируешь пример слайда из корпоративного шаблона. Строго JSON.
+user: |
+  Парсер определил тип «{{ kind }}» ({{ reason }}), элементов-повторов: {{ n_items }}.
+  Типы: title, section, agenda, text, two_column, cards, steps, stats, table, chart,
+  image_text, quote, team, contacts, thanks, guide (служебный слайд-инструкция шаблона).
+  Верни JSON: {"kind": "...", "confidence": 0.0, "reusable": true, "note": "коротко"}

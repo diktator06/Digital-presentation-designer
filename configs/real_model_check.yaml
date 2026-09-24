@@ -1,0 +1,14 @@
+# Real open-weight model check (local Ollama): one template, three variants.
+settings: config/local_ollama.yaml
+templates:
+  - data/templates/vk_education.pptx
+content:
+  - data/content/tz_vk_tech.pdf
+brief:
+  text: >
+    Цифровой дизайнер презентаций — сервис, который по брифу и контент-пакету собирает
+    презентацию в фирменном шаблоне компании и сам проверяет её качество.
+  purpose: product
+  n_slides: 10
+  language: ru
+variants: [balanced, visual, dense]

@@ -1,0 +1,135 @@
+"""Audit input model: what a check can look at (file facts + render + template rules)."""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from functools import cached_property
+from pathlib import Path
+
+from PIL import Image
+from pptx import Presentation
+
+from decksmith.core.models import Box, ContentCorpus, DeckPlan, TemplateProfile
+from decksmith.layout.textfit import measure
+from decksmith.parsing.elements import Element, extract_elements
+from decksmith.parsing.ooxml import parse_theme, rgb_to_hex
+
+
+@dataclass
+class SlideFacts:
+    index: int
+    slide: object
+    layout_name: str
+    elements: list[Element]
+    png: Path | None = None
+    kind: str = ""  # pattern kind / compose kind the builder used
+
+    @property
+    def texts(self) -> list[Element]:
+        return [e for e in self.elements if e.kind == "text" and e.text.strip()]
+
+    @property
+    def content(self) -> list[Element]:
+        """Blocks that carry content (not decoration, not footers/page numbers)."""
+        return [e for e in self.elements if not e.brand and ((e.kind == "text" and e.text.strip()) or e.kind in ("table", "chart"))]
+
+    def _measure(self, e: Element):
+        l, t, r, b = e.insets
+        return measure(e.paragraphs or [e.text], e.style.font or "Arial", e.style.size or 14, e.box.w - (l + r - 2 * 91440),
+                       e.style.bold, inset_lr=91440, inset_tb=(t + b) // 2)
+
+    def effective_box(self, e: Element) -> Box:
+        """Box grown to the measured text height (auto-fit boxes grow when rendered)."""
+        if e.kind != "text" or not e.style:
+            return e.box
+        m = self._measure(e)
+        if m.height_emu > e.box.h and e.autofit:
+            return Box(x=e.box.x, y=e.box.y, w=e.box.w, h=m.height_emu)
+        return e.box
+
+    def text_extent(self, e: Element) -> Box:
+        """Area actually covered by glyphs (for fill ratio)."""
+        if e.kind != "text" or not e.style:
+            return e.box
+        m = self._measure(e)
+        return Box(x=e.box.x, y=e.box.y, w=min(e.box.w, m.width_emu), h=min(max(e.box.h, 0), m.height_emu) if not e.autofit else m.height_emu)
+
+    def lines(self, e: Element) -> tuple[int, int]:
+        """(lines needed, lines that fit in the frame)."""
+        m = self._measure(e)
+        _, t, _, b = e.insets
+        line_h = (e.style.size or 14) * 1.2 * 12700
+        fit = max(1, int(round((e.box.h - t - b) / line_h + 0.25)))
+        return m.lines, fit
+
+    def text_height_needed(self, e: Element) -> int:
+        return self._measure(e).height_emu
+
+
+@dataclass
+class AuditContext:
+    pptx: Path
+    profile: TemplateProfile
+    plan: DeckPlan | None = None
+    corpus: ContentCorpus | None = None
+    pngs: list[Path] = field(default_factory=list)
+    slide_kinds: list[str] = field(default_factory=list)
+    slide_sources: list[int | None] = field(default_factory=list)  # template slide each output slide was cloned from
+    brief_text: str = ""
+    render_ok: bool = True
+
+    @cached_property
+    def template_prs(self):
+        return Presentation(self.profile.file)
+
+    def template_element(self, i: int, shape_id: int) -> Element | None:
+        """The same shape in the template example slide (for 'inherited from template' checks)."""
+        src = self.slide_sources[i] if i < len(self.slide_sources) else None
+        if src is None:
+            return None
+        cache = self.__dict__.setdefault("_tpl_cache", {})
+        if src not in cache:
+            s = self.template_prs.slides[src]
+            t = self.profile.tokens
+            cache[src] = {e.shape_id: e for e in extract_elements(s, parse_theme(s.slide_layout.slide_master), t.slide_w, t.slide_h)}
+        return cache[src].get(shape_id)
+
+    @cached_property
+    def prs(self):
+        return Presentation(str(self.pptx))
+
+    @cached_property
+    def slides(self) -> list[SlideFacts]:
+        t = self.profile.tokens
+        out = []
+        for i, s in enumerate(self.prs.slides):
+            theme = parse_theme(s.slide_layout.slide_master)
+            els = extract_elements(s, theme, t.slide_w, t.slide_h, include_empty_placeholders=False)
+            out.append(SlideFacts(index=i, slide=s, layout_name=s.slide_layout.name, elements=els,
+                                  png=self.pngs[i] if i < len(self.pngs) else None,
+                                  kind=self.slide_kinds[i] if i < len(self.slide_kinds) else ""))
+        return out
+
+    def image(self, i: int) -> Image.Image | None:
+        if i < len(self.pngs) and self.pngs[i] and Path(self.pngs[i]).exists():
+            return Image.open(self.pngs[i]).convert("RGB")
+        return None
+
+    def sample_background(self, i: int, box: Box) -> str | None:
+        """Dominant rendered color inside a box (text pixels are the minority)."""
+        im = self.image(i)
+        if im is None:
+            return None
+        t = self.profile.tokens
+        sx, sy = im.width / t.slide_w, im.height / t.slide_h
+        x0, y0 = max(0, int(box.x * sx)), max(0, int(box.y * sy))
+        x1, y1 = min(im.width, int(box.r * sx)), min(im.height, int(box.b * sy))
+        if x1 - x0 < 2 or y1 - y0 < 2:
+            return None
+        crop = im.crop((x0, y0, x1, y1)).resize((min(48, x1 - x0), min(24, y1 - y0)))
+        q = crop.quantize(colors=4, method=Image.Quantize.MEDIANCUT)
+        counts = sorted(q.getcolors() or [], reverse=True)
+        if not counts:
+            return None
+        pal = q.getpalette()
+        idx = counts[0][1]
+        return rgb_to_hex((pal[idx * 3], pal[idx * 3 + 1], pal[idx * 3 + 2]))

@@ -1,0 +1,41 @@
+# DeckSmith runtime configuration. Every value may be overridden via ${ENV}.
+llm:
+  provider: ${DECKSMITH_LLM_PROVIDER:-openai_compatible}   # openai_compatible | offline
+  base_url: ${DECKSMITH_LLM_BASE_URL:-}
+  api_key: ${DECKSMITH_LLM_API_KEY:-}
+  model: ${DECKSMITH_LLM_MODEL:-Qwen/Qwen3-32B}
+  vlm_model: ${DECKSMITH_VLM_MODEL:-}
+  max_concurrency: 12
+  timeout_s: 120
+  temperature: 0.3
+  max_retries: 2
+  extra_body:
+    chat_template_kwargs: {enable_thinking: false}
+
+image:
+  provider: ${DECKSMITH_IMAGE_PROVIDER:-none}   # none | openai_images | placeholder
+  base_url: ${DECKSMITH_IMAGE_BASE_URL:-}
+  api_key: ${DECKSMITH_IMAGE_API_KEY:-}
+  model: ${DECKSMITH_IMAGE_MODEL:-black-forest-labs/FLUX.1-schnell}
+  size: 1024x768
+  steps: 4
+  max_images_per_deck: 4
+
+render:
+  soffice: ${DECKSMITH_SOFFICE:-}
+  dpi: 96
+  timeout_s: 180
+
+pipeline:
+  target_slides: 12
+  min_slides: 10
+  max_slides: 15
+  variants: [balanced, visual, dense]
+  deadline_s: 285
+  visual_audit: true
+  auto_fix: true
+
+paths:
+  workspace: workspace
+  skills: skills
+  assets: assets

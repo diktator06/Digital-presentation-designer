@@ -1,0 +1,16 @@
+# Reproducible demo run: 3 templates x 3 variants on one content pack.
+# decksmith run configs/demo.yaml  (needs DECKSMITH_LLM_* in .env)
+templates:
+  - data/templates/vk_tech.pptx
+  - data/templates/vk_workspace.pptx
+  - data/templates/vk_education.pptx
+content:
+  - data/content/tz_vk_tech.pdf
+brief:
+  text: >
+    Цифровой дизайнер презентаций — сервис, который по брифу и контент-пакету
+    собирает презентацию в фирменном шаблоне компании и сам проверяет её качество.
+  purpose: product
+  n_slides: 12
+  language: ru
+variants: [balanced, visual, dense]

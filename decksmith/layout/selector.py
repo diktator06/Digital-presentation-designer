@@ -1,0 +1,263 @@
+"""Deterministic pattern selection: DeckPlan x TemplateProfile x Variant -> decisions.
+
+Every decision carries a rationale string, so the UI/defence can show *why* a
+given template slide was picked. Same inputs always give the same output.
+"""
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, field
+from functools import lru_cache
+from pathlib import Path
+
+import yaml
+
+from decksmith.core.config import ROOT
+from decksmith.core.models import DeckPlan, Pattern, PatternKind, SlideLayout, SlideSpec, SlotRole, TemplateProfile
+
+K = PatternKind
+
+COMPAT: dict[PatternKind, dict[PatternKind, float]] = {
+    K.title: {K.title: 1.0},
+    K.section: {K.section: 1.0, K.title: 0.45},
+    K.agenda: {K.agenda: 1.0, K.steps: 0.55, K.cards: 0.45},
+    K.text: {K.text: 1.0, K.two_column: 0.75, K.image_text: 0.55},
+    K.two_column: {K.two_column: 1.0, K.text: 0.7, K.cards: 0.6},
+    K.cards: {K.cards: 1.0, K.steps: 0.55, K.stats: 0.25},
+    K.steps: {K.steps: 1.0, K.cards: 0.7},
+    K.stats: {K.stats: 1.0, K.cards: 0.5},
+    K.table: {K.table: 1.0},
+    K.chart: {K.chart: 1.0},
+    K.image_text: {K.image_text: 1.0, K.text: 0.5},
+    K.quote: {K.quote: 1.0, K.section: 0.3},
+    K.team: {K.team: 1.0, K.cards: 0.5},
+    K.contacts: {K.contacts: 1.0, K.thanks: 0.8},
+    K.thanks: {K.thanks: 1.0, K.contacts: 0.7, K.section: 0.35, K.title: 0.4},
+}
+ITEM_KINDS = {K.cards, K.steps, K.stats, K.agenda, K.team}
+
+
+@dataclass
+class Variant:
+    name: str
+    title: str
+    description: str
+    kind_bias: dict[str, float]
+    text_density: float = 1.0
+    max_bullets: int = 5
+    represent: dict[str, list[str]] = field(default_factory=dict)
+    drop_sections: bool = False
+    exec_summary_first: bool = False
+    images: int = 1
+    prefer_icons: bool = False
+    tone: str = "auto"
+
+
+@lru_cache(maxsize=4)
+def load_variants(path: str | None = None) -> dict[str, Variant]:
+    p = Path(path) if path else ROOT / "config" / "variants.yaml"
+    data = yaml.safe_load(p.read_text(encoding="utf-8"))
+    return {k: Variant(name=k, **v) for k, v in data.items()}
+
+
+def spec_items_count(spec: SlideSpec) -> int:
+    if spec.items:
+        return len(spec.items)
+    if spec.intent in ITEM_KINDS and spec.bullets:
+        return len(spec.bullets)
+    return 0
+
+
+def spec_chars(spec: SlideSpec) -> int:
+    n = len(spec.subtitle) + len(spec.message)
+    n += sum(len(b) for b in spec.bullets)
+    n += sum(len(i.title) + len(i.text) + len(i.value) for i in spec.items)
+    return n
+
+
+def _removable(p: Pattern) -> bool:
+    return bool(p.repeaters) and p.repeaters[0].direction in ("row", "column", "grid")
+
+
+@dataclass
+class Candidate:
+    score: float
+    mode: str
+    pattern: Pattern | None
+    keep_items: int | None
+    why: list[str]
+
+
+def score_pattern(p: Pattern, spec: SlideSpec, variant: Variant, used: dict[str, int], prev: str | None,
+                  has_image: bool = False) -> Candidate | None:
+    compat = COMPAT.get(spec.intent, {spec.intent: 1.0})
+    w = compat.get(p.kind)
+    if w is None or p.kind == K.guide or p.score_hint < 0.2:
+        return None
+    if spec.intent != K.quote and not any(s.role == SlotRole.title for s in p.slots):
+        return None  # every non-quote slide must show its title
+    if p.kind == K.image_text and not has_image:
+        return None  # an empty picture frame (or someone else's photo) is worse than another layout
+    why = [f"{spec.intent.value}->{p.kind.value} x{w:.2f}"]
+    s = 3.0 * w
+    need = spec_items_count(spec)
+    keep = None
+    if p.kind in ITEM_KINDS:
+        if need == 0:
+            return None
+        if p.n_items == need:
+            s += 1.2
+            why.append(f"items {need}=={p.n_items}")
+        elif p.n_items > need and _removable(p) and p.n_items - need <= 2 and need >= 2:
+            s += 0.2
+            keep = need
+            why.append(f"items {need}<{p.n_items} (hide {p.n_items - need})")
+        else:
+            return None
+    elif need > 0 and spec.intent in ITEM_KINDS:
+        s -= 0.8  # items would be flattened into text
+    # item structure: titles+texts need either two slots or a composite box
+    if p.repeaters and spec.items:
+        roles = set(p.repeaters[0].slot_roles)
+        comp = any(sl.para_roles for sl in p.slots if sl.item_index == 0)
+        has_titles = any(i.title for i in spec.items)
+        has_texts = any(i.text for i in spec.items)
+        if has_titles and has_texts and not comp and not (SlotRole.item_title in roles and SlotRole.item_text in roles):
+            s -= 0.6
+            why.append("packs title+text")
+        if spec.intent == K.stats and SlotRole.number not in roles and not comp:
+            s -= 1.0
+            why.append("no number slot")
+    # free slots that the spec cannot fill leave holes after deletion
+    fillable = {SlotRole.title, SlotRole.table, SlotRole.chart, SlotRole.icon, SlotRole.image, SlotRole.decor}
+    if spec.subtitle or spec.message:
+        fillable |= {SlotRole.subtitle, SlotRole.body}
+    if spec.bullets or spec.quote:
+        fillable.add(SlotRole.body)
+    if spec.intent == K.quote and spec.quote_author:
+        fillable |= {SlotRole.caption, SlotRole.label, SlotRole.person}
+    holes = [sl for sl in p.slots if sl.item_index is None and sl.kind == "text" and sl.role not in fillable]
+    if holes:
+        s -= 0.25 * len(holes)
+        why.append(f"{len(holes)} unfilled")
+    # text capacity vs content
+    chars = spec_chars(spec) * variant.text_density
+    cap = max(p.text_capacity, 1)
+    if chars:
+        r = chars / cap
+        if r > 1.1:
+            s -= min(2.5, (r - 1.1) * 2.0)
+            why.append(f"tight {r:.1f}x")
+        elif r < 0.15 and p.kind not in (K.title, K.section, K.thanks, K.quote):
+            s -= 0.4
+            why.append("sparse")
+    bias = variant.kind_bias.get(p.kind.value, 1.0)
+    s += math.log(max(bias, 0.05)) * 1.5
+    s += 2.0 * (p.score_hint - 1.0)
+    n_used = used.get(p.id, 0)
+    if n_used:
+        s -= 0.9 * n_used
+        why.append(f"reused x{n_used}")
+    if prev == p.id:
+        s -= 1.5
+    if p.source == "layout":
+        s -= 0.15
+    return Candidate(score=s, mode="clone", pattern=p, keep_items=keep, why=why)
+
+
+def compose_candidates(spec: SlideSpec, variant: Variant, has_image: bool = False) -> list[Candidate]:
+    out = []
+    rep = variant.represent
+    data_pref = rep.get("data", ["chart", "table", "kpi"])
+    item_pref = rep.get("items", ["cards", "steps", "bullets"])
+
+    def pref_bonus(lst, name):
+        return (len(lst) - lst.index(name)) * 0.35 if name in lst else 0.0
+
+    if spec.chart and spec.chart.series:
+        out.append(Candidate(3.2 + pref_bonus(data_pref, "chart"), "compose:chart", None, None, ["native chart from data"]))
+        if len(spec.chart.categories) <= 7:
+            out.append(Candidate(2.6 + pref_bonus(data_pref, "table"), "compose:table", None, None, ["chart data as table"]))
+        if len(spec.chart.series) == 1 and len(spec.chart.categories) <= 4:
+            out.append(Candidate(2.5 + pref_bonus(data_pref, "kpi"), "compose:kpi", None, None, ["few values as KPI tiles"]))
+    if spec.table and spec.table.rows:
+        out.append(Candidate(3.3 + pref_bonus(data_pref, "table"), "compose:table", None, None, ["native table"]))
+    if spec.items:
+        n = len(spec.items)
+        if spec.intent == K.steps or spec.intent == K.agenda:
+            out.append(Candidate(2.4 + pref_bonus(item_pref, "steps"), "compose:process", None, None, [f"{n}-step process diagram"]))
+        if spec.intent == K.stats or all(i.value for i in spec.items):
+            bonus = 1.2 if spec.intent == K.stats and n <= 4 else 0.0
+            out.append(Candidate(2.3 + bonus + pref_bonus(data_pref, "kpi"), "compose:kpi", None, None, ["value tiles"]))
+        out.append(Candidate(2.0 + pref_bonus(item_pref, "cards"), "compose:cards", None, None, [f"{n} icon cards"]))
+        out.append(Candidate(1.6 + pref_bonus(item_pref, "bullets"), "compose:bullets", None, None, ["items as bullet list"]))
+    if spec.bullets and not spec.items:
+        out.append(Candidate(1.9 + pref_bonus(item_pref, "bullets"), "compose:bullets", None, None, ["bullet list"]))
+    if spec.intent == K.image_text and variant.images and has_image:
+        out.append(Candidate(2.2, "compose:image", None, None, ["picture + text"]))
+    if spec.intent == K.quote and spec.quote:
+        out.append(Candidate(2.6, "compose:quote", None, None, ["large quote in template type"]))
+    if spec.intent in (K.section, K.thanks, K.title):
+        out.append(Candidate(1.4, "compose:section", None, None, ["divider composed in template type"]))
+    return out
+
+
+def _chart_compatible(p: Pattern, spec: SlideSpec) -> bool:
+    """A native chart example is reused only for the same chart family."""
+    if p.kind != K.chart:
+        return True
+    if not spec.chart:
+        return False
+    kinds = " ".join(t for t in p.tags if t.startswith("chart:")).upper()
+    fam = {"bar": ("BAR", "COLUMN"), "column": ("BAR", "COLUMN"), "line": ("LINE",), "pie": ("PIE", "DOUGHNUT"),
+           "doughnut": ("PIE", "DOUGHNUT")}[spec.chart.type]
+    return any(f in kinds for f in fam)
+
+
+def _key(c: "Candidate") -> str:
+    return c.pattern.id if c.pattern else c.mode
+
+
+def select_layouts(plan: DeckPlan, profile: TemplateProfile, variant: Variant,
+                   avoid: dict[str, set[str]] | None = None, images: set[str] | None = None) -> list[SlideLayout]:
+    """`avoid` = choices other variants already made per slide: a near-equal alternative
+    is preferred so the three variants differ visibly while staying on-template."""
+    patterns = profile.usable_patterns()
+    used: dict[str, int] = {}
+    prev: str | None = None
+    out: list[SlideLayout] = []
+    avoid = avoid or {}
+    images = images or set()
+    for spec in plan.slides:
+        has_image = spec.id in images
+        cands: list[Candidate] = []
+        for p in patterns:
+            c = score_pattern(p, spec, variant, used, prev, has_image)
+            if c:
+                cands.append(c)
+        comp = compose_candidates(spec, variant, has_image)
+        # structured data is always drawn natively (charts/tables from data)
+        if spec.chart or spec.table:
+            cands = [c for c in cands if c.pattern and c.pattern.kind in (K.table, K.chart) and "shape_table" not in c.pattern.tags
+                     and "shape_chart" not in c.pattern.tags and _chart_compatible(c.pattern, spec)]
+        cands += comp
+        taken = avoid.get(spec.id, set()) if spec.intent not in (K.title, K.thanks) else set()  # one brand cover
+        if taken and len(cands) > 1:
+            for c in cands:
+                if _key(c) in taken:
+                    c.score -= 1.3
+                    c.why.append("taken by another variant")
+        if not cands:
+            cands = [Candidate(0.0, "compose:bullets", None, None, ["no compatible pattern: composed list"])]
+        cands.sort(key=lambda c: (-c.score, c.pattern.id if c.pattern else c.mode))
+        best = cands[0]
+        alt = ", ".join(f"{(c.pattern.id if c.pattern else c.mode)}={c.score:.2f}" for c in cands[1:3])
+        rationale = f"{best.mode}:{best.pattern.id if best.pattern else ''} score={best.score:.2f} [{'; '.join(best.why)}] alt: {alt}"
+        if best.pattern:
+            used[best.pattern.id] = used.get(best.pattern.id, 0) + 1
+            prev = best.pattern.id
+            out.append(SlideLayout(spec_id=spec.id, mode="clone", pattern_id=best.pattern.id, keep_items=best.keep_items, rationale=rationale))
+        else:
+            prev = best.mode
+            out.append(SlideLayout(spec_id=spec.id, mode="compose", compose_kind=best.mode.split(":", 1)[1], rationale=rationale))
+    return out

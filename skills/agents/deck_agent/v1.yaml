@@ -1,0 +1,21 @@
+name: deck_agent
+version: v1
+description: >
+  Сквозной воркфлоу генерации колоды. Шаги до Enter (analyze_template, ingest_content)
+  кэшируются; после Enter — plan -> (3 варианта параллельно) layout -> build -> render -> audit -> fix -> export.
+steps:
+  - {name: analyze_template, stage: pre, deterministic: true}
+  - {name: label_patterns,   stage: pre, skill: pattern_labeler@v1, enabled: false}
+  - {name: ingest_content,   stage: pre, deterministic: true}
+  - {name: outline,          stage: run, skill: outline@v1}
+  - {name: write_slides,     stage: run, skill: slide_writer@v1, parallel: true}
+  - {name: images,           stage: run, parallel: true}
+  - {name: select_layouts,   stage: variant, deterministic: true}
+  - {name: build,            stage: variant, deterministic: true}
+  - {name: shorten,          stage: variant, skill: shortener@v1}
+  - {name: render,           stage: variant, deterministic: true}
+  - {name: audit_rules,      stage: variant, deterministic: true}
+  - {name: audit_visual,     stage: variant, skill: visual_audit@v1, parallel: true}
+  - {name: autofix,          stage: variant, deterministic: true}
+  - {name: fix_contextual,   stage: on_demand, skill: fixer@v1}
+  - {name: export,           stage: variant, formats: [pptx, pdf, html]}

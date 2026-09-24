@@ -1,0 +1,8 @@
+services:
+  decksmith:
+    build: .
+    ports: ["8000:8000"]
+    env_file: [.env]
+    volumes:
+      - ./workspace:/app/workspace
+    restart: unless-stopped

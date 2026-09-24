@@ -1,0 +1,47 @@
+# Three layout variants for the same template + content.
+# Axis of difference = (density x visualisation mode x ordering). All variants
+# use only template patterns / tokens, so they are equally on-brand.
+#
+# kind_bias      multiplies pattern scores per pattern kind
+# text_density   multiplies the character budget given to the writer
+# represent      how an abstract content block is rendered by preference
+#                (items -> cards|steps|table|bullets, series -> chart|table|kpi)
+
+balanced:
+  title: "Сбалансированный"
+  description: "Порядок из плана, смешение карточек, текста и данных; средняя плотность."
+  kind_bias: {cards: 1.1, steps: 1.0, stats: 1.0, text: 0.9, two_column: 0.9, table: 1.0, chart: 1.0, image_text: 0.9, agenda: 1.0, section: 1.0}
+  text_density: 1.0
+  max_bullets: 5
+  represent: {items: [cards, steps, bullets], data: [chart, table, kpi]}
+  drop_sections: false
+  exec_summary_first: false
+  images: 1
+  prefer_icons: false
+  tone: auto            # auto | light | dark (for composed slides)
+
+visual:
+  title: "Визуальный"
+  description: "Минимум текста: KPI-плитки, диаграммы, пиктограммы и изображения; больше воздуха."
+  kind_bias: {stats: 1.5, image_text: 1.4, steps: 1.3, cards: 1.2, chart: 1.3, text: 0.4, two_column: 0.5, table: 0.6, agenda: 1.0, section: 1.1}
+  text_density: 0.7
+  max_bullets: 4
+  represent: {items: [cards, steps, bullets], data: [kpi, chart, table]}
+  drop_sections: false
+  exec_summary_first: false
+  images: 3
+  prefer_icons: true
+  tone: auto
+
+dense:
+  title: "Аналитический"
+  description: "Пирамида Минто: вывод в начале, таблицы вместо графиков, больше пунктов на слайде, без разделителей."
+  kind_bias: {table: 1.4, two_column: 1.3, text: 1.2, cards: 1.1, steps: 1.0, stats: 0.9, chart: 0.9, image_text: 0.3, section: 0.2, agenda: 0.8}
+  text_density: 1.3
+  max_bullets: 6
+  represent: {items: [bullets, table, cards], data: [table, chart, kpi]}
+  drop_sections: true
+  exec_summary_first: true
+  images: 0
+  prefer_icons: false
+  tone: auto

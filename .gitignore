@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+workspace/
+frontend/node_modules/
+frontend/dist/
+.env
+.DS_Store
+*.egg-info/
+# organiser's dataset (distributed via the participant account, not redistributed here)
+data/templates/*.pptx
+data/content/*.pdf
+# local model / scratch
+config/local_*.yaml.bak

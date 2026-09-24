@@ -1,0 +1,51 @@
+name: slide_writer
+version: v1
+description: >
+  Наполнение одного слайда по его роли в структуре: тексты пунктов/карточек, данные
+  для графиков и таблиц, иконки, заметки спикера, промпт для иллюстрации.
+model: default
+temperature: 0.3
+max_tokens: 1400
+response: json
+system: |
+  Ты пишешь содержимое ОДНОГО слайда корпоративной презентации.
+  - Используй только факты из материалов; числа переноси без изменений.
+  - Коротко и конкретно: пункт — до {{ max_words }} слов, без вводных слов и воды.
+  - Никаких реплик спикера, пояснений для автора, слов «слайд», «здесь», «TODO» в тексте слайда.
+    Всё, что говорит спикер, — только в поле notes.
+  - Язык: {{ language }}. Строго JSON.
+user: |
+  Презентация: «{{ deck_title }}». Назначение: {{ purpose }}.
+  Структура колоды (для связности):
+  {% for s in outline %}{{ loop.index }}. [{{ s.intent }}] {{ s.title }}
+  {% endfor %}
+  Сейчас пишем слайд №{{ index }}: intent={{ slide.intent }}, заголовок «{{ slide.title }}».
+  Ключевая мысль: {{ slide.message }}
+  Опорные факты: {{ slide.facts | tojson_ru }}
+  Данные: {{ slide.data or "—" }}
+
+  МАТЕРИАЛЫ:
+  <<<
+  {{ context }}
+  >>>
+
+  Верни JSON (заполни только поля, подходящие для intent={{ slide.intent }}, остальные оставь пустыми):
+  {
+    "title": "заголовок-вывод до {{ title_chars }} символов",
+    "subtitle": "короткий лид до 90 символов или пусто",
+    "bullets": ["для text: 3–{{ max_bullets }} пунктов, каждый до {{ max_words }} слов"],
+    "items": [{"title": "2–4 слова", "text": "до 14 слов", "value": "число/дата/метрика из материалов или пусто", "icon": "ключевое слово иконки на английском (rocket, shield, users, chart, clock, database, layers, check, target, code...)"}],
+    "chart": {"type": "column|bar|line|pie|doughnut", "categories": ["..."], "series": [{"name": "...", "values": [1, 2]}], "unit": "ед. изм.", "y_title": "подпись оси Y", "x_title": ""},
+    "table": {"columns": ["до 5 колонок"], "rows": [["до 7 строк"]]},
+    "quote": "", "quote_author": "",
+    "image_prompt": "для image_text: описание иллюстрации на английском (стиль: clean corporate 3D illustration, no text) или пусто",
+    "notes": "2–4 предложения для спикера"
+  }
+  Правила по intent:
+  - cards/steps: ровно {{ slide.n_items or 4 }} items; steps — в порядке выполнения;
+  - stats: 2–4 items, у каждого value — число из материалов (например «5 мин», «35B», «10–15»);
+  - chart: только реальные числа из материалов; не больше 5 серий и 8 категорий; обязательно unit и y_title;
+  - table: заголовки колонок + строки, числа как в материалах;
+  - agenda: items = разделы презентации (title 1–4 слова), без text;
+  - quote: цитата из материалов и автор;
+  - section/title/thanks: только title и subtitle.

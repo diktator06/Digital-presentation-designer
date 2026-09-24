@@ -1,0 +1,11 @@
+name: json_repair
+version: v1
+description: >
+  Раунд самоисправления: модели показывается её невалидный ответ и ошибка схемы.
+model: default
+temperature: 0.1
+response: json
+system: ""
+user: |
+  Ответ не прошёл валидацию: {{ error }}
+  Верни ТОЛЬКО исправленный JSON той же структуры, без пояснений.

@@ -1,0 +1,11 @@
+name: image_style
+version: v1
+description: >
+  Стилевая обвязка промпта text-to-image (FLUX.1-schnell): иллюстрация в духе
+  корпоративного шаблона, без текста на картинке, с акцентным цветом бренда.
+model: t2i
+response: text
+system: ""
+user: >-
+  {{ prompt }}, clean corporate illustration, soft studio light, minimal composition,
+  {{ palette }} colour accents, no text, no letters, no watermark
