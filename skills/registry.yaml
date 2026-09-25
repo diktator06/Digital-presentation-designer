@@ -3,13 +3,13 @@
 # manifest records name@version + sha256 of every file used.
 skills:
   outline:          {active: v1}
-  slide_writer:     {active: v1}
+  slide_writer:     {active: v2}
   headline:         {active: v1}
   shortener:        {active: v1}
-  visual_audit:     {active: v1}
+  visual_audit:     {active: v2}
   fixer:            {active: v1}
   pattern_labeler:  {active: v1}
   image_style:      {active: v1}
   json_repair:      {active: v1}
 agents:
-  deck_agent:       {active: v2}
+  deck_agent:       {active: v3}

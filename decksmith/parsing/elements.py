@@ -82,7 +82,23 @@ def _has_autofit(shape) -> bool:
     return bp is not None and (bp.find(qn("a:spAutoFit")) is not None or bp.find(qn("a:normAutofit")) is not None)
 
 
-def _insets(shape) -> tuple[int, int, int, int]:
+def _table_box(shape, box: Box) -> Box:
+    """Renderers draw a table at its grid size (column widths, row heights); some exporters
+    (Google Slides) leave a dummy 3000000 EMU frame, so the frame size is not trusted."""
+    tbl = shape._element.find(".//" + qn("a:tbl"))
+    grid = tbl.find(qn("a:tblGrid")) if tbl is not None else None
+    if grid is None:
+        return box
+    w = sum(int(gc.get("w", "0")) for gc in grid.findall(qn("a:gridCol")))
+    h = sum(int(tr.get("h", "0")) for tr in tbl.findall(qn("a:tr")))
+    try:
+        sx, sy = box.w / int(shape.width), box.h / int(shape.height)  # group scaling
+    except (TypeError, ValueError, ZeroDivisionError):
+        sx = sy = 1.0
+    return Box(x=box.x, y=box.y, w=int(w * sx) or box.w, h=int(h * sy) or box.h)
+
+
+def text_insets(shape) -> tuple[int, int, int, int]:
     txb = shape._element.find(qn("p:txBody"))
     bp = txb.find(qn("a:bodyPr")) if txb is not None else None
     d = (91440, 45720, 91440, 45720)
@@ -91,7 +107,7 @@ def _insets(shape) -> tuple[int, int, int, int]:
     return tuple(int(bp.get(k)) if bp.get(k) is not None else dv for k, dv in zip(("lIns", "tIns", "rIns", "bIns"), d))  # type: ignore[return-value]
 
 
-def _anchor(shape) -> str:
+def text_anchor(shape) -> str:
     """Vertical text anchor (t / ctr / b), following placeholder inheritance to layout and master."""
     node = shape
     for _ in range(3):
@@ -145,6 +161,7 @@ def extract_elements(slide, theme: Theme, slide_w: int, slide_h: int, include_em
                 ph_idx = None
         if getattr(sh, "has_table", False) and sh.has_table:
             tbl = sh.table
+            base["box"] = _table_box(sh, rec.box)
             out.append(Element(kind="table", table_shape=(len(tbl.rows), len(tbl.columns)), placeholder=ph, placeholder_idx=ph_idx, **base))
             continue
         if getattr(sh, "has_chart", False) and sh.has_chart:
@@ -210,8 +227,8 @@ def extract_elements(slide, theme: Theme, slide_w: int, slide_h: int, include_em
                     autofit=_has_autofit(sh),
                     auto_shape=prst,
                     has_line=_line_visible(sh),
-                    insets=_insets(sh),
-                    anchor=_anchor(sh),
+                    insets=text_insets(sh),
+                    anchor=text_anchor(sh),
                     brand=ph in ("FOOTER", "DATE", "SLIDE_NUMBER") or _has_field(sh),
                     **base,
                 )

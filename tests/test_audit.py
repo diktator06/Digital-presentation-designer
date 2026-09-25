@@ -4,6 +4,7 @@ import asyncio
 import pytest
 from pptx import Presentation
 from pptx.dml.color import RGBColor
+from pptx.enum.text import MSO_AUTO_SIZE
 from pptx.util import Emu, Pt
 
 from decksmith.audit.context import AuditContext
@@ -32,6 +33,13 @@ def _defective_deck(profile, path):
             else:
                 ph._element.getparent().remove(ph._element)
         return s
+
+    def card(s, x, y, w, h):
+        c = s.shapes.add_shape(1, Emu(int(x)), Emu(int(y)), Emu(int(w)), Emu(int(h)))
+        c.fill.solid()
+        c.fill.fore_color.rgb = RGBColor(0xEE, 0xF2, 0xF8)
+        c.line.fill.background()
+        return c
 
     def tb(s, x, y, w, h, text, size=14, color=None, font=None):
         t = s.shapes.add_textbox(Emu(int(x)), Emu(int(y)), Emu(int(w)), Emu(int(h)))
@@ -62,11 +70,24 @@ def _defective_deck(profile, path):
     s = slide("Чужой шрифт")  # 5
     tb(s, W * 0.1, H * 0.4, W * 0.6, H * 0.1, "Текст набран чужой гарнитурой", font="Comic Sans MS")
     s = slide("Большая таблица")  # 6
-    t = s.shapes.add_table(10, 6, Emu(int(W * 0.1)), Emu(int(H * 0.3)), Emu(int(W * 0.8)), Emu(int(H * 0.6)))
-    for r in range(10):
+    t = s.shapes.add_table(12, 6, Emu(int(W * 0.1)), Emu(int(H * 0.25)), Emu(int(W * 0.8)), Emu(int(H * 0.65)))
+    for r in range(12):
         for c in range(6):
             t.table.cell(r, c).text = str(r * c)
     s = slide("Пустой слайд с заголовком")  # 7
+    s = slide("Таблица на 9 строк")  # 8: allowed (organisers: up to 10 rows is not an error)
+    t = s.shapes.add_table(9, 4, Emu(int(W * 0.1)), Emu(int(H * 0.25)), Emu(int(W * 0.8)), Emu(int(H * 0.6)))
+    for r in range(9):
+        for c in range(4):
+            t.table.cell(r, c).text = str(r * c)
+    long = "Текст карточки описывает, как сервис раскладывает контент по слотам шаблона. " * 7
+    s = slide("Текст вышел за карточку")  # 9
+    card(s, W * 0.1, H * 0.35, W * 0.35, H * 0.3)
+    tb(s, W * 0.12, H * 0.38, W * 0.31, H * 0.1, long)
+    s = slide("Рамка мала, но в карточке есть место")  # 10
+    card(s, W * 0.1, H * 0.3, W * 0.5, H * 0.6)
+    fixed = tb(s, W * 0.12, H * 0.33, W * 0.46, H * 0.12, long[:300])
+    fixed.text_frame.auto_size = MSO_AUTO_SIZE.NONE
     prs.save(path)
     return path
 
@@ -93,6 +114,28 @@ def defective(profiles, tmp_path_factory):
 def test_check_detects_injected_defect(defective, check, slide):
     _, _, rep = defective
     assert any(i.check == check and i.slide == slide for i in rep.issues), f"{check} missed on slide {slide + 1}"
+
+
+def test_organisers_clarifications(defective):
+    """Tables up to 10 rows pass; text may outgrow its frame only inside its block."""
+    _, _, rep = defective
+    found = {(i.check, i.slide) for i in rep.issues}
+    assert ("density.table", 8) not in found, "a 9-row table is allowed"
+    assert ("layout.block_overflow", 9) in found, "text spilling out of its card is an error"
+    assert ("layout.text_overflow", 10) in found and ("layout.block_overflow", 10) not in found
+
+
+def test_overflowing_frame_grows_inside_its_block(defective, tmp_path):
+    prof, p, rep = defective
+    iss = [i for i in rep.issues if i.check == "layout.text_overflow" and i.slide == 10]
+    out = tmp_path / "grown.pptx"
+    res = asyncio.run(apply_fixes(p, iss, prof, out))
+    assert res["applied"]
+    shape = next(sh for sh in Presentation(str(out)).slides[10].shapes if sh.has_text_frame and sh.text_frame.text.startswith("Текст карточки"))
+    assert {r.font.size.pt for para in shape.text_frame.paragraphs for r in para.runs} == {14.0}, "type kept, frame resized"
+    rep2 = asyncio.run(run_audit(AuditContext(pptx=out, profile=prof)))
+    left = {(i.check, i.slide) for i in rep2.issues}
+    assert ("layout.text_overflow", 10) not in left and ("layout.block_overflow", 10) not in left
 
 
 def test_issues_carry_boxes_for_visualisation(defective):

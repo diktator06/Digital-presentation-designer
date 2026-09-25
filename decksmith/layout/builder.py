@@ -22,6 +22,8 @@ from pptx import Presentation
 from pptx.oxml.ns import qn
 
 from decksmith.core.models import (
+    TABLE_MAX_COLS,
+    TABLE_MAX_ROWS,
     Box,
     DeckPlan,
     Item,
@@ -40,6 +42,7 @@ from decksmith.layout.pptx_ops import (
     duplicate_slide,
     fill_chart,
     fill_table,
+    fit_table_text,
     move_shape,
     replace_picture,
     scale_font_sizes,
@@ -51,7 +54,8 @@ from decksmith.layout.pptx_ops import (
 from decksmith.layout.selector import Variant
 from pptx.enum.text import MSO_ANCHOR
 
-from decksmith.layout.textfit import fit_composite, fit_font_size, max_chars_for, measure, snap_down
+from decksmith.layout.room import grow_frame, text_height, text_room
+from decksmith.layout.textfit import DEFAULT_INSET_TB, fit_composite, fit_font_size, max_chars_for, measure, snap_down
 from decksmith.parsing.ooxml import contrast_ratio, rel_luminance
 from decksmith.parsing.template_parser import region_color, region_colors
 
@@ -416,8 +420,9 @@ class DeckBuilder:
                 if displaced and spec.quote_author in displaced[0] and len(frames) > 1:
                     fills[frames[1].id] = ([spec.quote_author], None)
 
-        # apply text + fit
+        # apply text (fitted at the end)
         deleted: set[str] = set()
+        placed: list[tuple[Slot, object, list[str]]] = []
         for slot in pat.slots:
             if slot.kind != "text":
                 continue
@@ -437,18 +442,7 @@ class DeckBuilder:
                 runs = sh.text_frame.paragraphs[0].runs
                 if runs:
                     runs[0].font.bold = True
-            fit_slot = slot
-            if slot.role == SlotRole.title and slot.item_index is None:
-                clear = self._clear_title_box(pat.layout_index, slot.box)
-                if clear is not None:
-                    x, y, h = sh.left, sh.top, sh.height  # pin all four: placeholders may inherit
-                    sh.left, sh.top, sh.width, sh.height = x, y, clear.w, h
-                    fit_slot = slot.model_copy(update={"box": clear})
-            self._fit(slide, n, sh, fit_slot, paras)
-            if slot.id in pat.backdrops:
-                self._fit_backdrop(slide, pat.backdrops[slot.id], sh, fit_slot, paras)
-            else:
-                self._ensure_contrast(sh, slot, pat)
+            placed.append((slot, sh, paras))
         # pictures
         pics = [s for s in pat.slots if s.kind == "picture" and (s.item_index is None or s.item_index < keep)]
         content_pics = sorted([s for s in pics if s.role == SlotRole.image], key=lambda s: -s.box.area)
@@ -504,14 +498,20 @@ class DeckBuilder:
             table = spec.table or (_chart_as_table(spec).model_copy() if spec.chart and slot.kind == "table" else None)
             try:
                 if slot.kind == "table" and table and not table_has_merges(sh):
-                    fill_table(sh, table.columns[:5], [r[:5] for r in table.rows[:6]], t.slide_h - t.margins.bottom)
-                    continue
+                    fill_table(sh, table.columns[:TABLE_MAX_COLS], [r[:TABLE_MAX_COLS] for r in table.rows[:TABLE_MAX_ROWS - 1]],
+                               t.slide_h - t.margins.bottom)
+                    if fit_table_text(sh, t.slide_h - t.margins.bottom, t.body_font, max(t.type_scale.caption, 10.0)):
+                        continue
+                    log.info("template table cannot hold the data readably, redrawing natively")
                 if slot.kind == "chart" and spec.chart and spec.chart.series:
                     fill_chart(sh, spec.chart.categories[:8], [(s.name, s.values) for s in spec.chart.series], spec.chart.unit)
                     continue
             except Exception as e:  # unusual chart/table XML: draw natively in the same box instead
                 log.warning("native refill failed (%s), redrawing", e)
             box = slot.box
+            if slot.kind == "table" and not any(o.box.y >= box.b and min(o.box.r, box.r) > max(o.box.x, box.x)
+                                                for o in pat.slots if o is not slot and o.kind != "picture"):
+                box = Box(x=box.x, y=box.y, w=box.w, h=max(box.h, t.slide_h - t.margins.bottom - box.y))  # nothing below
             delete_shape(sh)
             st = self._style_for(slide_bg=self.profile.tokens.background_hex)
             if slot.kind == "chart" and spec.chart:
@@ -522,6 +522,20 @@ class DeckBuilder:
         for ph in list(slide.placeholders):
             if ph.has_text_frame and not ph.text_frame.text.strip():
                 delete_shape(ph)
+        # fit the text last: a frame may grow into room that unused slots left free
+        for slot, sh, paras in placed:
+            fit_slot = slot
+            if slot.role == SlotRole.title and slot.item_index is None:
+                clear = self._clear_title_box(pat.layout_index, slot.box)
+                if clear is not None:
+                    x, y, h = sh.left, sh.top, sh.height  # pin all four: placeholders may inherit
+                    sh.left, sh.top, sh.width, sh.height = x, y, clear.w, h
+                    fit_slot = slot.model_copy(update={"box": clear})
+            self._fit(slide, n, sh, fit_slot, paras)
+            if slot.id in pat.backdrops:
+                self._fit_backdrop(slide, pat.backdrops[slot.id], sh, fit_slot, paras)
+            else:
+                self._ensure_contrast(sh, slot, pat)
 
     def _ensure_contrast(self, sh, slot: Slot, pat: Pattern) -> None:
         """A slot whose own colour is unreadable on what the template renders under it
@@ -616,6 +630,15 @@ class DeckBuilder:
             return ([it.value], None) if it.value else ([], None)
         return ([it.text or it.title], None)
 
+    def _brand_zones(self, slide) -> list[Box]:
+        """Logo / footer / page-number zones the slide's layout and master draw."""
+        li = next((l.index for l, lay in zip(self.profile.layouts, self.layouts) if lay is slide.slide_layout), None)
+        if li is None:
+            return []
+        own = {f"layout:{li}", f"master:{self.profile.layouts[li].master_index}"}
+        return [b.box for b in self.profile.brand_elements
+                if b.kind in ("logo", "footer", "page_number") and own & set(b.source.split(","))]
+
     def _fit(self, slide, n: int, sh, slot: Slot, paras: list[str]) -> None:
         if not paras or not any(p.strip() for p in paras):
             return
@@ -627,14 +650,24 @@ class DeckBuilder:
             avail_h = slot.box.h
         else:
             avail_h = max(slot.box.h, int(slot.max_lines * size * 1.2 * EMU_PT + 91440))
+        # other frames grow inside their block before the type shrinks (organisers' clarification)
+        room = None
+        if slot.role not in (SlotRole.title, SlotRole.subtitle) and not slot.painted:
+            room = text_room(slide, sh, self.profile.tokens, owned_h=slot.box.h, keep_clear=self._brand_zones(slide))
+        if room is not None:
+            avail_h = max(slot.box.h, min(avail_h, room[2] - room[1]) if slot.autofit else room[2] - room[1])
         box_w = slot.box.w
         if slot.para_roles:
             # multi-style box: shrink all paragraphs by one factor, keeping their size ratios
             sizes = [ps.size or size for ps in slot.para_styles] or [size]
             tidx = [0] + [1] * (len(paras) - 1)
-            f = fit_composite(paras, [sizes[min(i, len(sizes) - 1)] for i in tidx], font, box_w, avail_h)
+            psizes = [sizes[min(i, len(sizes) - 1)] for i in tidx]
+            f = fit_composite(paras, psizes, font, box_w, avail_h)
             if f < 0.99:
                 scale_font_sizes(sh, f, default_size=size)
+            if room is not None:
+                grow_frame(sh, room, sum(measure([p], font, s * f, box_w, inset_tb=0).height_emu
+                                         for p, s in zip(paras, psizes)) + 2 * DEFAULT_INSET_TB)
             return
         ts = self.profile.tokens.type_scale
         allowed = ts.sizes
@@ -643,13 +676,17 @@ class DeckBuilder:
         if slot.role == SlotRole.title:
             floor_ratio = min(floor_ratio, 0.6)
         fitted = fit_font_size(paras, font, size, box_w, avail_h, slot.style.bold, floor_ratio, allowed)
+        final = size
         if fitted is None:
-            min_size = snap_down(max(size * floor_ratio, ts.caption), allowed)
+            final = min_size = snap_down(max(size * floor_ratio, ts.caption), allowed)
             set_font_size(sh, min_size)
             self.report.overflows.append(Overflow(slide=n, shape_id=sh.shape_id, role=slot.role.value, paragraphs=paras,
                                                   budget=max_chars_for(box_w, avail_h, font, min_size, slot.style.bold)))
         elif fitted < size - 0.05:
+            final = fitted
             set_font_size(sh, fitted)
+        if room is not None:
+            grow_frame(sh, room, text_height(sh, paras, font, final, box_w, slot.style.bold))
 
     # ---------------------------------------------------------------- compose
     def _canvas(self) -> tuple[int, bool]:

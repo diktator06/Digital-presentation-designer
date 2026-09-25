@@ -31,7 +31,7 @@ def test_plan_via_llm_with_repair(profiles):
     assert mode == "llm"
     skills = [r["skill"] for r in emu.requests]
     assert "outline@v1" in skills and "outline@v1:repair" in skills  # invalid schema -> one repair round
-    assert sum(s == "slide_writer@v1" for s in skills) >= 6  # writers in parallel, one per content slide
+    assert sum(s == "slide_writer@v2" for s in skills) >= 6  # writers in parallel, one per content slide
     assert all(r["body"].get("response_format") == {"type": "json_object"} for r in emu.requests)
     intents = [s.intent.value for s in plan.slides]
     assert intents[0] == "title" and intents[-1] == "thanks"

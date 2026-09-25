@@ -347,6 +347,13 @@ class ChartSpec(BaseModel):
     y_title: str = ""
 
 
+# Table density limit shared by layout and audit. TZ Appendix 1 says 7 rows; the organisers
+# clarified in the participants' chat that longer tables are not an error and up to 10 rows
+# (header included) keeps a table readable.
+TABLE_MAX_ROWS = 10
+TABLE_MAX_COLS = 5
+
+
 class TableSpec(BaseModel):
     columns: list[str]
     rows: list[list[str]]

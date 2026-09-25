@@ -280,6 +280,64 @@ def fill_table(gf, columns: list[str], rows: list[list[str]], max_bottom: int | 
     gf.height = int(sum(int(tr.get("h", "0")) for tr in trs)) or gf.height
 
 
+def fit_table_text(gf, max_bottom: int, font: str, min_size: float = 10.0, default_size: float = 18.0) -> bool:
+    """After a refill: one scale factor for all cell text such that every word fits its column and
+    the rows, grown to their text, end above `max_bottom`; rows get the heights renderers will
+    draw. False when even the smallest readable size does not fit (the caller redraws the table)."""
+    from decksmith.layout.textfit import measure
+
+    tbl = gf._element.graphic.graphicData.tbl
+    widths = [int(gc.get("w", "0")) for gc in tbl.find(qn("a:tblGrid")).findall(qn("a:gridCol"))]
+    rows = []
+    for tr in tbl.findall(qn("a:tr")):
+        cells = []
+        for c, tc in enumerate(tr.findall(qn("a:tc"))):
+            txb = tc.find(qn("a:txBody"))
+            if txb is None or c >= len(widths):
+                continue
+            rpr = txb.find(".//" + qn("a:rPr"))
+            latin = rpr.find(qn("a:latin")) if rpr is not None else None
+            pr = tc.find(qn("a:tcPr"))
+            mar = [int(pr.get(k, d)) if pr is not None else d for k, d in (("marL", 91440), ("marR", 91440), ("marT", 45720), ("marB", 45720))]
+            cells.append(("".join(t.text or "" for t in txb.iter(qn("a:t"))),
+                          int(rpr.get("sz")) / 100 if rpr is not None and rpr.get("sz") else default_size,
+                          rpr is not None and rpr.get("b") in ("1", "true"),
+                          (latin.get("typeface") if latin is not None and not latin.get("typeface", "+").startswith("+") else font),
+                          widths[c], mar))
+        rows.append((tr, int(tr.get("h", "0")), cells))
+    if not rows:
+        return True
+    avail = max_bottom - int(gf.top)
+    k = min(1.0, avail / (sum(h for _, h, _ in rows) or 1))  # template row heights are minimums only
+    big = max((c[1] for _, _, cells in rows for c in cells), default=default_size)
+    f = 1.0
+    while True:
+        heights, ok = [], True
+        for _, h0, cells in rows:
+            need = int(h0 * k)
+            for text, size, bold, face, w, (ml, mr, mt, mb) in cells:
+                if not text.strip():
+                    continue
+                m = measure([text], face, size * f, w - ml - mr + 2 * 91440, bold, inset_tb=(mt + mb) // 2)
+                ok = ok and m.longest_word_emu <= w - ml - mr
+                need = max(need, m.height_emu)
+            heights.append(need)
+        if ok and sum(heights) <= avail:
+            break
+        f -= 0.05
+        if big * f < min_size - 0.01:
+            return False
+    if f < 0.999:
+        for tr, _, _ in rows:
+            for el in list(tr.iter(qn("a:rPr"))) + list(tr.iter(qn("a:endParaRPr"))):
+                size = int(el.get("sz")) / 100 if el.get("sz") else default_size
+                el.set("sz", str(int(round(size * f * 2)) * 50))
+    for (tr, _, _), h in zip(rows, heights):
+        tr.set("h", str(h))
+    gf.height = sum(heights)
+    return True
+
+
 def fill_chart(gf, categories: list[str], series: list[tuple[str, list[float]]], unit: str = "") -> None:
     """Replace chart data in place: the template's chart styling (colours, fonts, axes) stays."""
     from pptx.chart.data import CategoryChartData

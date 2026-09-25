@@ -15,11 +15,12 @@ from pptx.dml.color import RGBColor
 from pptx.oxml.ns import qn
 
 from decksmith.audit.rules import PLACEHOLDER_RE, color_in_palette
-from decksmith.core.models import AuditIssue, TemplateProfile
+from decksmith.core.models import TABLE_MAX_COLS, TABLE_MAX_ROWS, AuditIssue, TemplateProfile
 from decksmith.generation.llm import LLMClient
 from decksmith.generation.skills import load_skill
 from decksmith.layout.compose import readable_on
 from decksmith.layout.pptx_ops import delete_shape, delete_slides, set_font_size, set_paragraphs, shape_by_id
+from decksmith.layout.room import grow_frame, text_height, text_room
 from decksmith.layout.textfit import fits, max_chars_for, snap_down
 from decksmith.parsing.elements import extract_elements
 from decksmith.parsing.ooxml import color_distance, parse_theme
@@ -67,6 +68,29 @@ def fx_shrink_text(fc: FixContext, iss: AuditIssue) -> bool:
         else:
             set_font_size(sh, snap_down(size * 0.7, scale))
             ok = True
+    return ok
+
+
+def fx_grow_frame(fc: FixContext, iss: AuditIssue) -> bool:
+    """Organisers' clarification: resizing a text frame inside its block is not a violation —
+    so the frame grows to its text first; the type shrinks only when the block has no room."""
+    ok = False
+    for sid in iss.shape_ids:
+        slide = fc.slides[iss.slide]
+        sh = shape_by_id(slide, sid)
+        e = fc.element(iss.slide, sid)
+        if sh is None or e is None or e.kind != "text" or not e.style:
+            continue
+        li = next((l.index for l in fc.profile.layouts if l.name == slide.slide_layout.name), None)
+        own = {f"layout:{li}", f"master:{fc.profile.layouts[li].master_index}"} if li is not None else set()
+        zones = [b.box for b in fc.profile.brand_elements
+                 if b.kind in ("logo", "footer", "page_number") and own & set(b.source.split(","))]
+        room = text_room(slide, sh, fc.profile.tokens, keep_clear=zones)
+        need = text_height(sh, e.paragraphs or [e.text], e.style.font or "Arial", e.style.size or 14, e.box.w, e.style.bold)
+        if room is not None and need <= room[2] - room[1] and grow_frame(sh, room, need):
+            ok = True
+            continue
+        ok = fx_shrink_text(fc, iss.model_copy(update={"shape_ids": [sid]})) or ok
     return ok
 
 
@@ -184,15 +208,15 @@ def fx_trim_table(fc: FixContext, iss: AuditIssue) -> bool:
             continue
         tbl = sh._element.graphic.graphicData.tbl
         rows = tbl.findall(qn("a:tr"))
-        for tr in rows[7:]:
+        for tr in rows[TABLE_MAX_ROWS:]:
             tbl.remove(tr)
         grid = tbl.find(qn("a:tblGrid"))
         cols = grid.findall(qn("a:gridCol"))
-        if len(cols) > 5:
-            for gc in cols[5:]:
+        if len(cols) > TABLE_MAX_COLS:
+            for gc in cols[TABLE_MAX_COLS:]:
                 grid.remove(gc)
             for tr in tbl.findall(qn("a:tr")):
-                for tc in tr.findall(qn("a:tc"))[5:]:
+                for tc in tr.findall(qn("a:tc"))[TABLE_MAX_COLS:]:
                     tr.remove(tc)
     return True
 
@@ -234,6 +258,7 @@ def fx_fix_aspect(fc: FixContext, iss: AuditIssue) -> bool:
 
 DETERMINISTIC = {
     "shrink_text": fx_shrink_text,
+    "grow_frame": fx_grow_frame,
     "move_inside": fx_move_inside,
     "snap_align": fx_snap_align,
     "set_template_font": fx_set_template_font,
@@ -246,7 +271,7 @@ DETERMINISTIC = {
     "drop_slide": fx_drop_slide,
     "fix_aspect": fx_fix_aspect,
 }
-AUTO_SAFE = {"shrink_text", "remove_placeholder", "trim_table", "trim_bullets", "fix_aspect", "move_inside"}
+AUTO_SAFE = {"shrink_text", "grow_frame", "remove_placeholder", "trim_table", "trim_bullets", "fix_aspect", "move_inside"}
 
 
 async def fx_contextual(fc: FixContext, issues: list[AuditIssue], llm: LLMClient, language: str) -> int:

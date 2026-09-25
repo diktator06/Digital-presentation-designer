@@ -19,8 +19,8 @@ from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
 from pptx.oxml.ns import qn
 from pptx.util import Emu, Pt
 
-from decksmith.core.models import Box, ChartSpec, DesignTokens, Item, TableSpec
-from decksmith.layout.textfit import fit_font_size, measure, snap_down
+from decksmith.core.models import TABLE_MAX_COLS, TABLE_MAX_ROWS, Box, ChartSpec, DesignTokens, Item, TableSpec
+from decksmith.layout.textfit import DEFAULT_INSET_LR, fit_font_size, measure, snap_down
 from decksmith.parsing.ooxml import color_distance, contrast_ratio, hex_to_rgb, rel_luminance, rgb_to_hex
 
 NO_STYLE_TABLE = "{2D5ABB26-0587-4C30-8999-92F81FD0307C}"
@@ -120,19 +120,30 @@ def _rgb(h: str) -> RGBColor:
 # ----------------------------------------------------------------------------
 # Primitives
 # ----------------------------------------------------------------------------
+def text_size(paragraphs: list[str], box: Box, st: Style, *, role: str = "body", bold: bool = False,
+              size: float | None = None, bullets: bool = False, font: str | None = None) -> float:
+    """Largest size on the template scale (down to a readable floor) at which the text fits the box."""
+    size = size or st.size(role)
+    font = font or (st.heading_font if role in ("title", "subtitle", "number") else st.body_font)
+    allowed = st.tokens.type_scale.sizes
+    w = box.w - (Emu(228600) if bullets else 0)
+    fitted = fit_font_size(paragraphs, font, size, w, box.h, bold, 0.7, allowed)
+    if not fitted:  # keep shrinking along the scale down to a readable floor
+        floor = max(8.0, min(st.size("caption"), size))
+        fitted = fit_font_size(paragraphs, font, size, w, box.h, bold, floor / size, allowed + [floor])
+    size = fitted or max(8.0, min(st.size("caption"), size * 0.6))
+    # a word wider than the box would be broken in the middle by the renderer: smaller type for it
+    word, room = measure(paragraphs, font, size, w, bold).longest_word_emu, w - 2 * DEFAULT_INSET_LR
+    if word > room:
+        size = max(9.0, snap_down(int(size * room / word * 2) / 2, allowed, 0.85))
+    return size
+
+
 def add_text(slide, box: Box, paragraphs: list[str], st: Style, *, role: str = "body", color: str | None = None,
              bold: bool = False, align: str = "left", anchor: str = "top", size: float | None = None,
              bullets: bool = False, font: str | None = None, fit: bool = True, name: str = "Text"):
-    size = size or st.size(role)
     font = font or (st.heading_font if role in ("title", "subtitle", "number") else st.body_font)
-    if fit:
-        allowed = st.tokens.type_scale.sizes
-        w = box.w - (Emu(228600) if bullets else 0)
-        fitted = fit_font_size(paragraphs, font, size, w, box.h, bold, 0.7, allowed)
-        if not fitted:  # keep shrinking along the scale down to a readable floor
-            floor = max(8.0, min(st.size("caption"), size))
-            fitted = fit_font_size(paragraphs, font, size, w, box.h, bold, floor / size, allowed + [floor])
-        size = fitted or max(8.0, min(st.size("caption"), size * 0.6))
+    size = text_size(paragraphs, box, st, role=role, bold=bold, size=size, bullets=bullets, font=font) if fit else (size or st.size(role))
     tb = slide.shapes.add_textbox(Emu(box.x), Emu(box.y), Emu(box.w), Emu(box.h))
     tb.name = name
     tf = tb.text_frame
@@ -321,15 +332,43 @@ def draw_chart(slide, box: Box, spec: ChartSpec, st: Style):
     return gf
 
 
+CELL_INSET_LR, CELL_INSET_TB = int(0.08 * 914400), int(0.03 * 914400)
+
+
+def table_rows(cols: list[str], rows: list[list[str]], widths: list[int], max_h: int, st: Style) -> tuple[float, list[int]]:
+    """Cell size and row heights: the largest size on the template scale (body down to the
+    caption floor) at which every row, wrapped in its column width, fits the box. Rows get their
+    measured heights, so the saved table is as tall as renderers draw it (a row grows to fit
+    its text); spare height is spread evenly up to comfortable rows."""
+    base = min(st.size("body"), 16)
+    floor = min(max(st.size("caption"), 10.0), base)
+    sizes = sorted({s for s in st.tokens.type_scale.sizes if floor <= s <= base} | {base, floor}, reverse=True)
+    need: list[int] = []
+    for size in sizes:
+        need = [max(measure([str(v)], st.body_font, size, widths[c], r == 0, inset_lr=CELL_INSET_LR,
+                            inset_tb=CELL_INSET_TB).height_emu for c, v in enumerate(row))
+                for r, row in enumerate([cols] + rows)]
+        if sum(need) <= max_h:
+            break
+    n = len(need)
+    even = int(min(max_h / n, size * 12700 * 2.6))
+    heights = [max(h, even) for h in need]
+    if sum(heights) > max_h >= sum(need):
+        heights = [h + (max_h - sum(need)) // n for h in need]
+    return size, heights
+
+
 def draw_table(slide, box: Box, spec: TableSpec, st: Style):
-    rows = spec.rows[:6]  # audit: <= 7 rows incl. header, <= 5 columns
-    cols = spec.columns[:5]
+    rows = spec.rows[: TABLE_MAX_ROWS - 1]  # audit: header + 9 rows, <= 5 columns
+    cols = spec.columns[:TABLE_MAX_COLS]
     rows = [r[: len(cols)] + [""] * (len(cols) - len(r[: len(cols)])) for r in rows]
     n_r, n_c = len(rows) + 1, len(cols)
-    size = min(st.size("body"), 16)
-    row_h = int(min(box.h / n_r, size * 12700 * 2.6))
-    h = row_h * n_r
-    gf = slide.shapes.add_table(n_r, n_c, Emu(box.x), Emu(box.y), Emu(box.w), Emu(h))
+    # first column wider when it holds labels
+    lens = [max([len(str(cols[c]))] + [len(str(r[c])) for r in rows]) for c in range(n_c)]
+    total = sum(max(l, 4) for l in lens)
+    widths = [int(box.w * max(l, 4) / total) for l in lens]
+    size, heights = table_rows(cols, rows, widths, box.h, st)
+    gf = slide.shapes.add_table(n_r, n_c, Emu(box.x), Emu(box.y), Emu(box.w), Emu(sum(heights)))
     gf.name = "Table"
     tbl = gf.table
     tblPr = gf._element.graphic.graphicData.tbl.tblPr
@@ -339,13 +378,10 @@ def draw_table(slide, box: Box, spec: TableSpec, st: Style):
     sid.text = NO_STYLE_TABLE
     tbl.first_row = True
     tbl.horz_banding = False
-    # first column wider when it holds labels
-    lens = [max([len(str(cols[c]))] + [len(str(r[c])) for r in rows]) for c in range(n_c)]
-    total = sum(max(l, 4) for l in lens)
     for c in range(n_c):
-        tbl.columns[c].width = Emu(int(box.w * max(lens[c], 4) / total))
+        tbl.columns[c].width = Emu(widths[c])
     for r in range(n_r):
-        tbl.rows[r].height = Emu(row_h)
+        tbl.rows[r].height = Emu(heights[r])
     head_fill = st.accent
     head_text = readable_on(head_fill, ["FFFFFF", "000000", st.bg])
     band = mix(st.bg, st.text, 0.06 if not st.dark else 0.12)
@@ -354,8 +390,8 @@ def draw_table(slide, box: Box, spec: TableSpec, st: Style):
             cell = tbl.cell(r, c)
             text = str(cols[c]) if r == 0 else str(rows[r - 1][c])
             cell.text = text
-            cell.margin_left = cell.margin_right = Emu(int(0.08 * 914400))
-            cell.margin_top = cell.margin_bottom = Emu(int(0.03 * 914400))
+            cell.margin_left = cell.margin_right = Emu(CELL_INSET_LR)
+            cell.margin_top = cell.margin_bottom = Emu(CELL_INSET_TB)
             cell.vertical_anchor = MSO_ANCHOR.MIDDLE
             fill = head_fill if r == 0 else (band if r % 2 == 0 else st.bg)
             cell.fill.solid()
@@ -442,44 +478,57 @@ def draw_process(slide, box: Box, items: list[Item], st: Style, numbered: bool =
 def draw_cards(slide, box: Box, items: list[Item], st: Style, icons: list[str | None] | None = None):
     items = items[:8]
     cells = _grid(box, len(items))
-    # cards should not stretch to the full region height: keep them compact
-    max_h = int(box.h * (0.62 if len(items) <= 4 else 0.48))
-    cells = [Box(x=c.x, y=c.y, w=c.w, h=min(c.h, max_h)) if len(items) <= 4 else c for c in cells]
-    pad = int(min(cells[0].w, cells[0].h) * 0.08)
+    row = len(items) <= 4
+    # cards stay compact (not stretched to the full region) unless their text needs the room
+    compact = min(cells[0].h, int(box.h * 0.62)) if row else cells[0].h
+    pad = int(min(cells[0].w, compact) * 0.08)
+    w, gap = cells[0].w - 2 * pad, int(pad * 0.4)
     card = st.card
     on_card = Style(tokens=st.tokens, bg=card, dark=rel_luminance(card) < 0.4)
-    for i, (it, c) in enumerate(zip(items, cells)):
-        add_rect(slide, c, card, rounded=True, name="Card")
-        y = c.y + pad
+    allowed = st.tokens.type_scale.sizes
+    start = min(st.size("subtitle"), st.size("body") * 1.3)
+    icon_s = int(min(compact * 0.22, cells[0].w * 0.25, 914400 * 0.55))
+    parts = []  # per card, sized on the compact card: icon, value/heading offset, value height, heading, size, height
+    for i, it in enumerate(items):
         icon = icons[i] if icons and i < len(icons) else None
+        top = pad + (icon_s + int(pad * 0.6) if icon else 0)
+        vh = int((compact - top) * 0.34) if it.value else 0
+        head = it.title or it.value
+        rest = compact - top - vh - pad
+        size = th = 0
+        if it.text:
+            # the heading takes the lines it needs (at most 40% of the room), the text starts right below it
+            size = fit_font_size([head], st.heading_font, start, w, int(rest * 0.4), True, 0.6, allowed + [start]) \
+                or snap_down(start * 0.6, allowed)
+            th = min(measure([head], st.heading_font, size, w, True).height_emu, int(rest * 0.4))
+        parts.append((icon, top, vh, head, size, th))
+    # one text size for the whole row: the largest that fits every card at its tallest; a row of
+    # cards then grows from compact just as far as that text needs (no text outside its card)
+    body = min((text_size([it.text], Box(x=0, y=0, w=w, h=max(c.h - pad - top - vh - th - gap, 1)), on_card)
+                for it, c, (_, top, vh, _, _, th) in zip(items, cells, parts) if it.text), default=st.size("body"))
+    if row:
+        need = [top + vh + th + gap + measure([it.text], st.body_font, body, w).height_emu + pad
+                for it, (_, top, vh, _, _, th) in zip(items, parts) if it.text]
+        h = min(max([compact] + need), cells[0].h)
+        cells = [Box(x=c.x, y=c.y, w=c.w, h=h) for c in cells]
+    for it, c, (icon, top, vh, head, size, th) in zip(items, cells, parts):
+        add_rect(slide, c, card, rounded=True, name="Card")
         if icon:
-            s = int(min(c.h * 0.22, c.w * 0.25, 914400 * 0.55))
-            add_picture(slide, Box(x=c.x + pad, y=y, w=s, h=s), icon, name="Icon")
-            y += s + int(pad * 0.6)
+            add_picture(slide, Box(x=c.x + pad, y=c.y + pad, w=icon_s, h=icon_s), icon, name="Icon")
+        y = c.y + top
         if it.value:
-            vh = int((c.b - y) * 0.34)
-            add_text(slide, Box(x=c.x + pad, y=y, w=c.w - 2 * pad, h=vh), [it.value], on_card, role="number",
+            add_text(slide, Box(x=c.x + pad, y=y, w=w, h=vh), [it.value], on_card, role="number",
                      color=on_card.accent_text, bold=True,
                      size=snap_down(min(st.size("number"), vh / 12700 / 1.25), st.tokens.type_scale.sizes), name="Card value")
             y += vh
-        head = it.title or it.value
-        w = c.w - 2 * pad
         if not it.text:
             add_text(slide, Box(x=c.x + pad, y=y, w=w, h=int((c.b - y) * 0.9)), [head], on_card, role="subtitle",
                      bold=True, name="Card title")
             continue
-        # the heading takes the lines it needs (at most 40% of the room), the text starts right below it
-        rest = c.b - y - pad
-        allowed = st.tokens.type_scale.sizes
-        start = min(st.size("subtitle"), st.size("body") * 1.3)
-        size = fit_font_size([head], st.heading_font, start, w, int(rest * 0.4), True, 0.6, allowed + [start]) \
-            or snap_down(start * 0.6, allowed)
-        th = min(measure([head], st.heading_font, size, w, True).height_emu, int(rest * 0.4))
         add_text(slide, Box(x=c.x + pad, y=y, w=w, h=th), [head], on_card, role="subtitle", bold=True, size=size,
                  fit=False, name="Card title")
-        gap = int(pad * 0.4)
-        add_text(slide, Box(x=c.x + pad, y=y + th + gap, w=w, h=max(rest - th - gap, 1)), [it.text], on_card,
-                 role="body", color=on_card.muted, name="Card text")
+        add_text(slide, Box(x=c.x + pad, y=y + th + gap, w=w, h=max(c.b - pad - y - th - gap, 1)), [it.text], on_card,
+                 role="body", color=on_card.muted, size=body, fit=False, name="Card text")
 
 
 def draw_quote(slide, box: Box, quote: str, author: str, st: Style):

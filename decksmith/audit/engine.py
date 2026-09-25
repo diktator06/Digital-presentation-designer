@@ -30,7 +30,7 @@ VLM_QUESTIONS = {
     "q10": ("content.table_legend_relevant", "Строки таблицы/легенда не работают на мысль", None),
     "q11": ("content.adjacent_logic", "Нет логической связи с соседними слайдами", None),
     "v1": ("layout.visual_overlap", "Визуально: наложение элементов", "shrink_text"),
-    "v2": ("layout.visual_clipping", "Визуально: текст обрезан/вылезает", "shrink_text"),
+    "v2": ("layout.visual_clipping", "Визуально: текст обрезан или вышел за свой блок", "shrink_text"),
 }
 WEIGHTS = {Severity.error: 4.0, Severity.warning: 1.5, Severity.info: 0.4}
 

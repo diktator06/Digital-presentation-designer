@@ -15,7 +15,7 @@ from pptx.oxml.ns import qn
 
 from decksmith.audit.context import AuditContext, SlideFacts
 from decksmith.content.ingest import NUM_RE, normalize_number
-from decksmith.core.models import AuditIssue, Box, Severity
+from decksmith.core.models import TABLE_MAX_COLS, TABLE_MAX_ROWS, AuditIssue, Box, Severity
 from decksmith.parsing.elements import Element
 from decksmith.parsing.ooxml import color_distance, contrast_ratio, hex_to_rgb
 
@@ -118,8 +118,8 @@ def overlap(ctx):
                 if lines:
                     inh = frames and inherited and not grown
                     sev, what = (Severity.info if inh else Severity.error), " (так в шаблоне)" if inh else ""
-                elif inherited:
-                    continue  # frames nest by template design, the lines themselves are apart
+                elif inherited or a.box.contains(b.box, tol=_tol(ctx)) or b.box.contains(a.box, tol=_tol(ctx)):
+                    continue  # frames nest (template design, or a frame grown inside its card), the lines are apart
                 else:
                     sev, what = Severity.warning, " (рамки; строки не пересекаются)"
                 inter = (ga if lines else a.box).intersection(gb if lines else b.box)
@@ -132,20 +132,81 @@ def overlap(ctx):
     return out
 
 
-@check("layout.text_overflow", "layout", "Текст не поместился в свою рамку", fixer="shrink_text")
+@check("layout.text_overflow", "layout", "Текст не поместился в свою рамку", fixer="grow_frame")
 def text_overflow(ctx):
+    """The fixer first resizes the frame inside its block (allowed by the organisers'
+    clarification), and shrinks the type only when the block has no room left."""
+    t = ctx.profile.tokens
+    area, tol = t.slide_w * t.slide_h, _tol(ctx)
     out = []
     for sf in ctx.slides:
+        plates = _plates(sf, area)
         for e in sf.texts:
             if not e.style or e.autofit:
                 continue
             need_lines, fit_lines = sf.lines(e)
-            if need_lines > fit_lines:
+            if need_lines > fit_lines and not _leaves_block(sf, e, plates, tol):
                 need = sf.text_height_needed(e)
                 out.append(issue("layout.text_overflow", sf.index,
                                  f"Текст «{e.text[:40]}» занимает {need_lines} стр. при месте на {fit_lines}",
                                  boxes=[Box(x=e.box.x, y=e.box.y, w=e.box.w, h=max(need, e.box.h))], shape_ids=[e.shape_id],
                                  data={"need": need, "have": e.box.h, "lines": need_lines, "fit": fit_lines}))
+    return out
+
+
+def _plates(sf: SlideFacts, area: int) -> list[Element]:
+    """Visible surfaces that can frame text: filled/outlined shapes and pictures (not icons)."""
+    return [e for e in sf.elements if not e.brand and 0 < e.box.area < 0.85 * area and
+            ((e.kind == "decor" and not e.graphic and (e.fill_hex or e.has_line)) or (e.kind == "picture" and not e.is_icon))]
+
+
+def text_block(sf: SlideFacts, e: Element, plates: list[Element], tol: int) -> Element | None:
+    """The block a text belongs to: the smallest plate spanning the frame's width and holding its top."""
+    best = None
+    for p in plates:
+        b = p.box
+        if b.area > e.box.area and b.x - tol <= e.box.x and e.box.r <= b.r + tol and b.y - tol <= e.box.y < b.b:
+            best = p if best is None or b.area < best.box.area else best
+    return best
+
+
+def _leaves_block(sf: SlideFacts, e: Element, plates: list[Element], tol: int) -> bool:
+    """The text spills out of its block: `layout.block_overflow` reports it (one finding per defect)."""
+    block = text_block(sf, e, plates, tol)
+    if block is None:
+        return False
+    g = sf.glyph_box(e)
+    return max(g.b - block.box.b, block.box.y - g.y) > tol
+
+
+@check("layout.block_overflow", "layout", "Текст вышел за пределы своего блока (плашки, карточки)", fixer="shrink_text")
+def block_overflow(ctx):
+    """Organisers' clarification of «текст не поместился в свою рамку»: the frame may grow inside
+    its block, the text must stay within the block. Lines are placed by the frame's anchor
+    (auto-fit frames grow downwards). The template's own example spilling the same way is design."""
+    t = ctx.profile.tokens
+    area, tol = t.slide_w * t.slide_h, _tol(ctx)
+    out = []
+    for sf in ctx.slides:
+        plates = _plates(sf, area)
+        for e in sf.texts:
+            if e.brand or not e.style:
+                continue
+            block = text_block(sf, e, plates, tol)
+            if block is None:
+                continue
+            g = sf.glyph_box(e)
+            over = max(g.b - block.box.b, block.box.y - g.y)
+            if over <= tol:
+                continue
+            tpl = ctx.template_element(sf.index, e.shape_id)
+            inherited = tpl is not None and inherited_geometry(ctx, sf, e) and tpl.style is not None and (
+                max(sf.glyph_box(tpl).b - block.box.b, block.box.y - sf.glyph_box(tpl).y) >= over - tol)
+            out.append(issue("layout.block_overflow", sf.index,
+                             f"Текст «{e.text[:40]}» выходит за свой блок на {over / 12700:.0f} pt" + (" (так в шаблоне)" if inherited else ""),
+                             boxes=[g, block.box], shape_ids=[e.shape_id],
+                             severity=Severity.info if inherited else Severity.error,
+                             data={"over": over, "block": block.shape_id, "inherited": inherited}))
     return out
 
 
@@ -411,15 +472,17 @@ def bullet_words(ctx):
     return out
 
 
-@check("density.table", "density", "Таблица больше 7 строк или 5 колонок", fixer="trim_table")
+@check("density.table", "density", "Таблица больше 10 строк или 5 колонок", fixer="trim_table")
 def table_size(ctx):
+    """TZ Appendix 1 names 7 rows; per the organisers' clarification tables up to 10 rows pass."""
     out = []
     for sf in ctx.slides:
         for e in sf.elements:
             if e.kind == "table" and e.table_shape:
                 r, c = e.table_shape
-                if r > 7 or c > 5:
-                    out.append(issue("density.table", sf.index, f"Таблица {r}×{c} (макс. 7×5)", boxes=[e.box], shape_ids=[e.shape_id]))
+                if r > TABLE_MAX_ROWS or c > TABLE_MAX_COLS:
+                    out.append(issue("density.table", sf.index, f"Таблица {r}×{c} (макс. {TABLE_MAX_ROWS} строк × {TABLE_MAX_COLS} колонок)",
+                                     boxes=[e.box], shape_ids=[e.shape_id]))
     return out
 
 
@@ -623,7 +686,7 @@ def content_lost(ctx):
         frags += [it.title or it.text or it.value for it in spec.items[:8]]
         frags += [it.value for it in spec.items[:8] if it.value and it.title]  # KPI values are the point
         if spec.table:
-            frags += [str(r[0]) for r in spec.table.rows[:6] if r]
+            frags += [str(r[0]) for r in spec.table.rows[:TABLE_MAX_ROWS - 1] if r]
         if spec.chart:
             frags += spec.chart.categories[:8]
         words = _slide_words(sf)
