@@ -1,0 +1,46 @@
+# Hosted OpenAI-compatible aggregator in the OpenRouter style (VseGPT, OpenRouter, ...).
+# Endpoint, key and model names come from .env; only the request details differ from default.yaml:
+# Qwen3 reasoning is switched off with OpenRouter's `reasoning` parameter (the vLLM
+# `chat_template_kwargs` switch is ignored by these hosts), and parallelism is moderate
+# because shared upstream providers rate-limit bursts (HTTP 429 is retried with backoff).
+#   .env: DECKSMITH_CONFIG=config/vsegpt.yaml
+llm:
+  provider: ${DECKSMITH_LLM_PROVIDER:-openai_compatible}
+  base_url: ${DECKSMITH_LLM_BASE_URL:-https://api.vsegpt.ru/v1}
+  api_key: ${DECKSMITH_LLM_API_KEY:-}
+  model: ${DECKSMITH_LLM_MODEL:-qwen/qwen3-32b}
+  vlm_model: ${DECKSMITH_VLM_MODEL:-}
+  max_concurrency: 8
+  timeout_s: 120
+  temperature: 0.3
+  max_retries: 3
+  extra_body:
+    reasoning: {enabled: false}
+
+image:
+  provider: ${DECKSMITH_IMAGE_PROVIDER:-none}   # none | openai_images | placeholder
+  base_url: ${DECKSMITH_IMAGE_BASE_URL:-}
+  api_key: ${DECKSMITH_IMAGE_API_KEY:-}
+  model: ${DECKSMITH_IMAGE_MODEL:-black-forest-labs/FLUX.1-schnell}
+  size: 1024x768
+  steps: 4
+  max_images_per_deck: 4
+
+render:
+  soffice: ${DECKSMITH_SOFFICE:-}
+  dpi: 96
+  timeout_s: 180
+
+pipeline:
+  target_slides: 12
+  min_slides: 10
+  max_slides: 15
+  variants: [balanced, visual, dense]
+  deadline_s: 285
+  visual_audit: true
+  auto_fix: true
+
+paths:
+  workspace: ${DECKSMITH_WORKSPACE:-workspace}
+  skills: skills
+  assets: assets

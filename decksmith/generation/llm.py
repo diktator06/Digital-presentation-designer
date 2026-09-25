@@ -147,6 +147,13 @@ class LLMClient:
                 if r.status_code == 400 and "chat_template_kwargs" in body:
                     body.pop("chat_template_kwargs")
                     continue
+                if r.status_code == 429 or r.status_code >= 500:  # rate limit / busy upstream: back off, retry
+                    ra = r.headers.get("retry-after", "")
+                    delay = float(ra) if ra.replace(".", "", 1).isdigit() else min(20.0, 2.0 * 2 ** attempt)
+                    last = LLMError(f"HTTP {r.status_code}: {r.text[:160]}")
+                    self.telemetry.calls.append(CallStat(skill, body["model"], time.time() - t0, ok=False, note=str(last)[:200]))
+                    await asyncio.sleep(min(delay, 30.0))
+                    continue
                 r.raise_for_status()
                 data = r.json()
                 content = data["choices"][0]["message"].get("content") or ""
