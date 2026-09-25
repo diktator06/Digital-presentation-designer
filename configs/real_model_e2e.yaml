@@ -1,0 +1,15 @@
+# End-to-end run with the model from .env (DECKSMITH_LLM_*): same brief and content as the
+# offline demo, so the two can be compared slide by slide.
+#   decksmith run configs/real_model_e2e.yaml
+templates:
+  - data/templates/vk_education.pptx
+content:
+  - data/content/tz_vk_tech.pdf
+brief:
+  text: >
+    Цифровой дизайнер презентаций — сервис, который по брифу и контент-пакету собирает
+    презентацию в фирменном шаблоне компании и сам проверяет её качество.
+  purpose: product
+  n_slides: 12
+  language: ru
+variants: [balanced, visual, dense]

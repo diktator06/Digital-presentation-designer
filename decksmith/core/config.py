@@ -16,6 +16,24 @@ ROOT = Path(__file__).resolve().parents[2]
 _ENV_RE = re.compile(r"\$\{([A-Z0-9_]+)(?::-([^}]*))?\}")
 
 
+def _load_dotenv(path: Path = ROOT / ".env") -> None:
+    """KEY=VALUE lines of the project's (gitignored) .env become environment defaults, as
+    docker-compose does with env_file; variables already set in the environment win."""
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key, value = key.strip(), value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+_load_dotenv()
+
+
 def _interpolate(value):
     if isinstance(value, str):
         return _ENV_RE.sub(lambda m: os.environ.get(m.group(1), m.group(2) or ""), value)
