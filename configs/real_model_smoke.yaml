@@ -1,0 +1,16 @@
+# Cheap check that the model path works end to end: one variant, 8 slides, same brief and
+# content as real_model_e2e.yaml. On VseGPT it costs about 6 ₽, most of it the visual audit
+# on the VLM (qwen3.8-27b is ~8x the price of qwen3-32b); the full 3-variant run is ~20-25 ₽.
+#   decksmith run configs/real_model_smoke.yaml
+templates:
+  - data/templates/vk_education.pptx
+content:
+  - data/content/tz_vk_tech.pdf
+brief:
+  text: >
+    Цифровой дизайнер презентаций — сервис, который по брифу и контент-пакету собирает
+    презентацию в фирменном шаблоне компании и сам проверяет её качество.
+  purpose: product
+  n_slides: 8
+  language: ru
+variants: [balanced]

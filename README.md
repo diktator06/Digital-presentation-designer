@@ -54,6 +54,7 @@ decksmith serve                     # UI + API на :8000
 decksmith run configs/demo.yaml            # с моделью из .env
 decksmith run configs/demo_offline.yaml    # без модели (офлайн-планировщик)
 decksmith run configs/real_model_check.yaml  # локальная открытая модель через Ollama (config/local_ollama.yaml)
+decksmith run configs/real_model_smoke.yaml  # быстрая проверка модели из .env: 1 вариант, 8 слайдов (~6 ₽ на VseGPT)
 decksmith run configs/pitch.yaml           # питч проекта на шаблоне ЛЦТ-2026 по готовому плану (без модели)
 ```
 
