@@ -137,8 +137,39 @@ def _normalize_outline(o: Outline, brief: Brief) -> Outline:
     while len(slides) > hi:  # drop from the middle, keep title/agenda/closing
         idx = next((i for i in range(len(slides) - 2, 1, -1) if slides[i].intent == "section"), len(slides) - 2)
         slides.pop(idx)
+    # a model that still answers short after the repair round: the missing slides are the ones a
+    # deck of that size would have anyway — the conclusions before the closing slide, the contents
+    ru = brief.language == "ru"
+    if len(slides) < hi and not any(s.message.strip().lower() == "summary" for s in slides):
+        slides.insert(len(slides) - 1, OutlineSlide(intent="text", title="Главное" if ru else "Key takeaways", message="summary"))
+    if len(slides) < hi and hi >= 6 and not any(s.intent == "agenda" for s in slides):
+        slides.insert(1, OutlineSlide(intent="agenda", title="Содержание" if ru else "Agenda"))
     o.slides = slides
     return o
+
+
+def complete_plan(plan: DeckPlan, n: int) -> None:
+    """Deterministic safety net after writing: a summary slide the writer left empty lists the
+    conclusions of the content slides, and a plan still short of the requested count (TZ: the
+    number of slides the user asked for) splits its longest lists into two slides."""
+    content = [s for s in plan.slides if s.intent.value in _CONTENT_INTENTS]
+    for s in plan.slides:
+        if "summary" in (s.notes or "") and not s.bullets and not s.items:
+            s.intent = PatternKind.text
+            s.bullets = [c.title for c in content if c is not s][:6]
+    cont = " (продолжение)" if plan.language == "ru" else " (continued)"
+    while len(plan.slides) < n:
+        longest = max(plan.slides, key=lambda s: max(len(s.items), len(s.bullets)) if s.intent.value in _CONTENT_INTENTS else 0)
+        field = "items" if len(longest.items) >= len(longest.bullets) else "bullets"
+        rows = getattr(longest, field)
+        if len(rows) < 4:
+            break
+        half = -(-len(rows) // 2)
+        second = longest.model_copy(deep=True, update={"title": longest.title + cont, field: rows[half:]})
+        setattr(longest, field, rows[:half])
+        plan.slides.insert(plan.slides.index(longest) + 1, second)
+    for i, s in enumerate(plan.slides):
+        s.id = f"s{i + 1}"
 
 
 def _to_spec(i: int, o: OutlineSlide, w: WrittenSlide | None) -> SlideSpec:
@@ -372,6 +403,7 @@ async def plan_with_llm(brief: Brief, corpus: ContentCorpus, profile: TemplatePr
     specs = [_to_spec(i, s, w) for i, (s, w) in enumerate(zip(o.slides, written))]
     plan = DeckPlan(title=o.title, subtitle=o.subtitle, purpose=brief.purpose, language=brief.language, slides=specs)
     plan = sanitize_plan(plan, o)
+    complete_plan(plan, brief.n_slides)
     dropped = drop_unsourced(plan, corpus, brief.text)
     if dropped:
         log.info("fact guard: %d lines with numbers absent from the materials dropped", dropped)

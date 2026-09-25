@@ -297,6 +297,26 @@ def _lvl_prop(txbody_el, lvl: int, attr: str, child: str | None = None):
     return d.get(attr)
 
 
+def _spacing_pt(el, size: float, line: bool = False) -> float | None:
+    """spcBef / spcAft / lnSpc value: points, or a percentage of the line (as a multiplier for lnSpc)."""
+    if el is None:
+        return None
+    pts, pct = el.find(qn("a:spcPts")), el.find(qn("a:spcPct"))
+    if pts is not None:
+        v = int(pts.get("val", "0")) / 100
+        return v / (size * 1.2) if line else v
+    if pct is not None:
+        v = int(pct.get("val", "0")) / 100000
+        return v if line else v * size * 1.2
+    return None
+
+
+def _txstyle_ppr(master, kind: str, lvl: int):
+    tx = master._element.find(qn("p:txStyles"))
+    st = tx.find(qn(f"p:{kind}")) if tx is not None else None
+    return st.find(qn(f"a:lvl{lvl + 1}pPr")) if st is not None else None
+
+
 def _txstyle(master, kind: str, lvl: int):
     tx = master._element.find(qn("p:txStyles"))
     if tx is None:
@@ -316,6 +336,9 @@ class EffStyle:
     font: str | None = None
     color: str | None = None
     bold: bool = False
+    space_before: float = 0.0  # pt, paragraph spacing (resolved like the run style)
+    space_after: float = 0.0
+    line: float = 1.0  # line spacing multiplier (1.0 = single)
 
 
 class StyleResolver:
@@ -444,7 +467,32 @@ class StyleResolver:
                 if na is not None and na.get("fontScale"):
                     st.size = st.size * int(na.get("fontScale")) / 100000
         st.size = round(st.size, 2)
+        if paragraph is not None:
+            self._spacing(shape, paragraph, lvl, st)
         return st
+
+    def _spacing(self, shape, paragraph, lvl: int, st: EffStyle) -> None:
+        """Paragraph spacing before/after and line spacing: paragraph, shape and inherited
+        placeholder list styles, then the master text style (as renderers resolve them)."""
+        sources = [paragraph._p.find(qn("a:pPr"))]
+        for sh in self._chain(shape):
+            txb = sh._element.find(qn("p:txBody"))
+            lst = txb.find(qn("a:lstStyle")) if txb is not None else None
+            sources.append(lst.find(qn(f"a:lvl{lvl + 1}pPr")) if lst is not None else None)
+        sources.append(_txstyle_ppr(self.master, self._master_style_kind(shape), lvl))
+        found = {}
+        for src in sources:
+            for tag in ("spcBef", "spcAft", "lnSpc"):
+                if tag not in found and src is not None and src.find(qn(f"a:{tag}")) is not None:
+                    found[tag] = src.find(qn(f"a:{tag}"))
+        size = st.size or 18.0
+        st.space_before = _spacing_pt(found.get("spcBef"), size) or 0.0
+        st.space_after = _spacing_pt(found.get("spcAft"), size) or 0.0
+        st.line = _spacing_pt(found.get("lnSpc"), size, line=True) or 1.0
+        txb = shape._element.find(qn("p:txBody"))
+        na = txb.find(qn("a:bodyPr") + "/" + qn("a:normAutofit")) if txb is not None else None
+        if na is not None and na.get("lnSpcReduction"):
+            st.line *= 1 - int(na.get("lnSpcReduction")) / 100000
 
     def dominant(self, shape) -> EffStyle | None:
         """Style of the first non-empty run (representative for the shape)."""

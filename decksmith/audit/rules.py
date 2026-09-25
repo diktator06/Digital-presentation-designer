@@ -97,6 +97,16 @@ def out_of_bounds(ctx):
     return out
 
 
+def _lines_collide_in_template(ctx: AuditContext, sf: SlideFacts, a: Element, b: Element) -> bool:
+    """Frames that overlap in the example are design, colliding lines are not: a one-line title of
+    the example clears the subtitle under it, a two-line title of ours does not."""
+    ta, tb = ctx.template_element(sf.index, a.shape_id), ctx.template_element(sf.index, b.shape_id)
+    if ta is None or tb is None or not (ta.kind == "text" and tb.kind == "text" and ta.style and tb.style):
+        return True  # no example text to compare with (layout placeholders): trust the geometry
+    ga, gb = sf.glyph_box(ta), sf.glyph_box(tb)
+    return ga.intersection(gb) > 0.08 * (min(ga.area, gb.area) or 1)
+
+
 @check("layout.overlap", "layout", "Два блока наложились друг на друга", fixer="shrink_text")
 def overlap(ctx):
     """Colliding text lines / objects are an error; frames that only overlap (lines apart) are a
@@ -116,7 +126,7 @@ def overlap(ctx):
                 inherited = inherited_geometry(ctx, sf, a) and inherited_geometry(ctx, sf, b)
                 grown = not (a.box.contains(ga, tol=12700) and b.box.contains(gb, tol=12700))
                 if lines:
-                    inh = frames and inherited and not grown
+                    inh = frames and inherited and not grown and _lines_collide_in_template(ctx, sf, a, b)
                     sev, what = (Severity.info if inh else Severity.error), " (так в шаблоне)" if inh else ""
                 elif inherited or a.box.contains(b.box, tol=_tol(ctx)) or b.box.contains(a.box, tol=_tol(ctx)):
                     continue  # frames nest (template design, or a frame grown inside its card), the lines are apart
@@ -144,13 +154,18 @@ def text_overflow(ctx):
         for e in sf.texts:
             if not e.style or e.autofit:
                 continue
-            need_lines, fit_lines = sf.lines(e)
-            if need_lines > fit_lines and not _leaves_block(sf, e, plates, tol):
-                need = sf.text_height_needed(e)
+            # heights, not line counts: paragraphs may differ in size and carry spacing
+            need = sf.text_height_needed(e)
+            if need > e.box.h + 0.25 * (e.style.size or 14) * 1.2 * 12700 and not _leaves_block(sf, e, plates, tol):
+                need_lines, fit_lines = sf.lines(e)
+                tpl = ctx.template_element(sf.index, e.shape_id)
+                inherited = tpl is not None and tpl.text == e.text and _same_box(tpl.box, e.box)  # the example's own text
                 out.append(issue("layout.text_overflow", sf.index,
-                                 f"Текст «{e.text[:40]}» занимает {need_lines} стр. при месте на {fit_lines}",
+                                 f"Текст «{e.text[:40]}» не помещается: нужно {need / 12700:.0f} pt по высоте, в рамке {e.box.h / 12700:.0f} pt"
+                                 + (" (так в шаблоне)" if inherited else ""),
                                  boxes=[Box(x=e.box.x, y=e.box.y, w=e.box.w, h=max(need, e.box.h))], shape_ids=[e.shape_id],
-                                 data={"need": need, "have": e.box.h, "lines": need_lines, "fit": fit_lines}))
+                                 severity=Severity.info if inherited else Severity.warning,
+                                 data={"need": need, "have": e.box.h, "lines": need_lines, "fit": fit_lines, "inherited": inherited}))
     return out
 
 
@@ -674,7 +689,8 @@ def title_missing(ctx):
 
 @check("integrity.content_lost", "integrity", "Часть контента плана не попала на слайд")
 def content_lost(ctx):
-    """Every bullet / item / table row of the plan must be visible (silent drops are layout bugs)."""
+    """Every bullet / item / table row of the plan, and the lead line of a divider or closing
+    slide, must be visible (silent drops are layout bugs)."""
     if not ctx.plan:
         return []
     out = []
@@ -689,6 +705,8 @@ def content_lost(ctx):
             frags += [str(r[0]) for r in spec.table.rows[:TABLE_MAX_ROWS - 1] if r]
         if spec.chart:
             frags += spec.chart.categories[:8]
+        if spec.intent.value in ("section", "thanks") and (spec.message or spec.subtitle):
+            frags.append(spec.message or spec.subtitle)  # a divider's lead line, a pitch's call to action
         words = _slide_words(sf)
         missing = [f for f in frags if f and not _present(f, words)]
         if missing:

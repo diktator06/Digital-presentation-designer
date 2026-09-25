@@ -214,6 +214,20 @@ def scale_font_sizes(shape, factor: float, default_size: float) -> None:
         rpr.set("sz", str(int(round(cur * factor * 100))))
 
 
+def scale_paragraph_sizes(shape, indices: list[int], factor: float, default_size: float) -> None:
+    """Scale the runs of some paragraphs only (a lead that gives way before the body text)."""
+    txb = shape._element.find(qn("p:txBody"))
+    if txb is None or factor >= 0.999:
+        return
+    paras = txb.findall(qn("a:p"))
+    for i in indices:
+        if i >= len(paras):
+            continue
+        for el in list(paras[i].iter(qn("a:rPr"))) + list(paras[i].iter(qn("a:endParaRPr"))):
+            cur = int(el.get("sz")) / 100 if el.get("sz") else default_size
+            el.set("sz", str(int(round(cur * factor * 100))))
+
+
 def disable_autofit(shape) -> None:
     txb = shape._element.find(qn("p:txBody"))
     if txb is None:

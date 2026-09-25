@@ -9,9 +9,24 @@ from PIL import Image
 from pptx import Presentation
 
 from decksmith.core.models import Box, ContentCorpus, DeckPlan, TemplateProfile
-from decksmith.layout.textfit import measure
+from decksmith.layout.textfit import Measure, measure, measure_rich
 from decksmith.parsing.elements import Element, extract_elements
 from decksmith.parsing.ooxml import parse_theme, rgb_to_hex
+
+
+def measure_element(e: Element, size_factor: float = 1.0) -> Measure:
+    """Text height/lines of an element as renderers lay it out: each paragraph with its own
+    size, weight, spacing and line spacing, inside the frame's insets."""
+    l, t, r, b = e.insets
+    w = e.box.w - (l + r - 2 * 91440)
+    base = e.style.size if e.style and e.style.size else 14
+    font = (e.style.font if e.style else None) or "Arial"
+    if e.para_styles and len(e.para_styles) == len(e.paragraphs):
+        styles = [((s.size or base) * size_factor, s.bold, s.space_before, s.space_after, s.line, s.font or font)
+                  for s in e.para_styles]
+        return measure_rich(e.paragraphs, styles, w, inset_lr=91440, inset_tb=(t + b) // 2)
+    return measure(e.paragraphs or [e.text], font, base * size_factor, w, bool(e.style and e.style.bold),
+                   inset_lr=91440, inset_tb=(t + b) // 2)
 
 
 @dataclass
@@ -33,9 +48,7 @@ class SlideFacts:
         return [e for e in self.elements if not e.brand and ((e.kind == "text" and e.text.strip()) or e.kind in ("table", "chart"))]
 
     def _measure(self, e: Element):
-        l, t, r, b = e.insets
-        return measure(e.paragraphs or [e.text], e.style.font or "Arial", e.style.size or 14, e.box.w - (l + r - 2 * 91440),
-                       e.style.bold, inset_lr=91440, inset_tb=(t + b) // 2)
+        return measure_element(e)
 
     def effective_box(self, e: Element) -> Box:
         """Box grown to the measured text height (auto-fit boxes grow when rendered)."""

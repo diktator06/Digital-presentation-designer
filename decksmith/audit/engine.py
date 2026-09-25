@@ -12,6 +12,7 @@ import time
 
 from decksmith.audit.context import AuditContext
 from decksmith.audit.rules import CHECKS, run_rules
+from decksmith.content.ingest import NUM_RE, normalize_number
 from decksmith.core.models import AuditIssue, AuditReport, Severity
 from decksmith.generation.llm import LLMClient
 from decksmith.generation.skills import Agent, skill_for_step
@@ -36,10 +37,13 @@ WEIGHTS = {Severity.error: 4.0, Severity.warning: 1.5, Severity.info: 0.4}
 
 
 def _facts_for(ctx: AuditContext, i: int) -> str:
+    """Sources a slide may quote: the content pack and the user's brief (its figures are facts too)."""
     nums = ", ".join(ctx.corpus.numbers[:60]) if ctx.corpus else ""
+    brief = list(dict.fromkeys(normalize_number(m.group(0)) for m in NUM_RE.finditer(ctx.brief_text or "")))
     spec = ctx.plan.slides[i] if ctx.plan and i < len(ctx.plan.slides) else None
     notes = spec.message if spec else ""
-    return f"числа в материалах: {nums or '—'}; ключевая мысль по плану: {notes or '—'}"
+    return (f"числа в материалах: {nums or '—'}; числа из брифа пользователя (тоже источник): {', '.join(brief[:30]) or '—'}; "
+            f"ключевая мысль по плану: {notes or '—'}")
 
 
 async def visual_audit(ctx: AuditContext, llm: LLMClient, agent: Agent) -> list[AuditIssue]:
@@ -52,6 +56,10 @@ async def visual_audit(ctx: AuditContext, llm: LLMClient, agent: Agent) -> list[
 
     async def one(i: int) -> list[AuditIssue]:
         kind = ctx.slides[i].kind
+        spec = ctx.plan.slides[i] if ctx.plan and i < len(ctx.plan.slides) else None
+        intent = spec.intent.value if spec else ""
+        if spec is not None and "[summary]" in (spec.notes or ""):
+            intent = "agenda"  # the list of conclusions is itself the point of a summary slide
         try:
             res = await llm.run_skill(skill, None, images=[ctx.pngs[i]], index=i + 1, total=n, title=titles[i],
                                       prev_title=titles[i - 1] if i else "", next_title=titles[i + 1] if i + 1 < n else "",
@@ -67,6 +75,8 @@ async def visual_audit(ctx: AuditContext, llm: LLMClient, agent: Agent) -> list[
                 continue
             if kind in ("title", "section", "thanks", "quote", "contacts") and q in ("q1", "q2", "q3", "q5", "q10"):
                 continue  # covers/dividers carry no argument and no body by design
+            if intent == "agenda" and q == "q1":
+                continue  # a table of contents or a summary is named, not concluded
             cid, title, fixer = VLM_QUESTIONS[q]
             out.append(AuditIssue(
                 id=f"{cid}#{i}", check=cid, category="content" if q.startswith("q") else "layout", deterministic=False,

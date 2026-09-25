@@ -19,9 +19,10 @@ from decksmith.core.models import TABLE_MAX_COLS, TABLE_MAX_ROWS, AuditIssue, Te
 from decksmith.generation.llm import LLMClient
 from decksmith.generation.skills import load_skill
 from decksmith.layout.compose import readable_on
-from decksmith.layout.pptx_ops import delete_shape, delete_slides, set_font_size, set_paragraphs, shape_by_id
-from decksmith.layout.room import grow_frame, text_height, text_room
-from decksmith.layout.textfit import fits, max_chars_for, snap_down
+from decksmith.layout.pptx_ops import delete_shape, delete_slides, scale_font_sizes, set_font_size, set_paragraphs, shape_by_id
+from decksmith.audit.context import measure_element
+from decksmith.layout.room import grow_frame, text_room
+from decksmith.layout.textfit import max_chars_for, snap_down
 from decksmith.parsing.elements import extract_elements
 from decksmith.parsing.ooxml import color_distance, parse_theme
 
@@ -51,17 +52,31 @@ def _runs(shape):
 
 
 # ----------------------------------------------------------------------------
+def _fits_at(e, factor: float) -> bool:
+    """The text, measured paragraph by paragraph with its spacing, fits the frame at size x factor."""
+    m = measure_element(e, factor)
+    l, _, r, _ = e.insets
+    return m.height_emu <= e.box.h * 1.02 and m.longest_word_emu <= e.box.w - l - r
+
+
 def fx_shrink_text(fc: FixContext, iss: AuditIssue) -> bool:
+    """Smaller type until the text fits. A frame that mixes sizes (bold lead over body text)
+    is scaled by one factor, so its hierarchy survives; a uniform one steps down the scale."""
     ok = False
     for sid in iss.shape_ids:
         sh = shape_by_id(fc.slides[iss.slide], sid)
         e = fc.element(iss.slide, sid)
         if sh is None or e is None or e.kind != "text" or not e.style:
             continue
-        scale = fc.profile.tokens.type_scale.sizes
         size = e.style.size or 14
+        if len({round(p.size or size, 1) for p in e.para_styles}) > 1:
+            f = next((k / 100 for k in range(95, 55, -5) if _fits_at(e, k / 100)), 0.6)
+            scale_font_sizes(sh, f, default_size=size)
+            ok = True
+            continue
+        scale = fc.profile.tokens.type_scale.sizes
         for s in sorted({x for x in scale if 0.6 * size <= x < size}, reverse=True):
-            if fits(e.paragraphs or [e.text], e.style.font or "Arial", s, e.box.w, e.box.h, e.style.bold):
+            if _fits_at(e, s / size):
                 set_font_size(sh, s)
                 ok = True
                 break
@@ -86,7 +101,7 @@ def fx_grow_frame(fc: FixContext, iss: AuditIssue) -> bool:
         zones = [b.box for b in fc.profile.brand_elements
                  if b.kind in ("logo", "footer", "page_number") and own & set(b.source.split(","))]
         room = text_room(slide, sh, fc.profile.tokens, keep_clear=zones)
-        need = text_height(sh, e.paragraphs or [e.text], e.style.font or "Arial", e.style.size or 14, e.box.w, e.style.bold)
+        need = measure_element(e).height_emu
         if room is not None and need <= room[2] - room[1] and grow_frame(sh, room, need):
             ok = True
             continue

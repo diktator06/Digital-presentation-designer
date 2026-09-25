@@ -14,9 +14,9 @@ from pptx.enum.shapes import MSO_SHAPE_TYPE
 from pptx.oxml.ns import qn
 
 from decksmith.core.models import Box, DesignTokens
-from decksmith.layout.textfit import DEFAULT_INSET_LR, measure
+from decksmith.layout.textfit import DEFAULT_INSET_LR, measure, measure_rich
 from decksmith.parsing.elements import text_anchor, text_insets
-from decksmith.parsing.ooxml import flatten_shapes
+from decksmith.parsing.ooxml import EffStyle, StyleResolver, flatten_shapes, parse_theme
 
 _FILLS = ("solidFill", "gradFill", "blipFill", "pattFill")
 GAP = int(0.06 * 914400)  # distance kept to the next object when the original one was larger
@@ -125,11 +125,56 @@ def text_room(slide, sh, tokens: DesignTokens, owned_h: int | None = None, keep_
     return own, max(min(top, own.y), 0), min(max(bottom, own.b), tokens.slide_h), fb
 
 
-def text_height(sh, paragraphs: list[str], font: str, size: float, width: int, bold: bool = False) -> int:
-    """Height the text needs in this frame, with the frame's own insets (as the audit measures it)."""
+def clear_title_box(box: Box, title_clear: Box | None) -> Box | None:
+    """Title frame shortened to end before background art that the layout draws inside the title
+    band (a logo strip baked into the background, corner graphics); None when already clear."""
+    tc = title_clear
+    if tc is None or box.r <= tc.r:
+        return None
+    if min(box.b, tc.b) - max(box.y, tc.y) < 0.5 * min(box.h, tc.h):
+        return None
+    w = tc.r - box.x
+    if w < 0.45 * box.w:
+        return None
+    return Box(x=box.x, y=box.y, w=w, h=box.h)
+
+
+def owned_height(slot, filled: list) -> int:
+    """Height of a slot's frame down to the next filled frame that starts inside it (frames of an
+    example overlap: a one-line title frame whose lower part hosts the subtitle)."""
+    b = slot.box
+    tops = [o.box.y for o in filled if o is not slot and b.y + 0.1 * b.h < o.box.y < b.b
+            and min(o.box.r, b.r) - max(o.box.x, b.x) > 0.3 * min(o.box.w, b.w)]
+    return max(min(tops) - b.y - int(0.02 * 914400), int(0.3 * b.h)) if tops else b.h
+
+
+def paragraph_styles(slide, sh) -> tuple[list[str], list[EffStyle]]:
+    """Non-empty paragraphs of a frame with their effective style, spacing included."""
+    res = StyleResolver(slide, parse_theme(slide.slide_layout.slide_master))
+    paras, styles = [], []
+    for p in sh.text_frame.paragraphs:
+        runs = [r for r in p.runs if r.text.strip()]
+        if runs:
+            paras.append(p.text)
+            styles.append(res.resolve(sh, p, runs[0]))
+    return paras, styles
+
+
+def spacing(styles: list[EffStyle]) -> tuple[float, float]:
+    """(pt of paragraph spacing between the paragraphs, largest line-spacing multiplier)."""
+    gaps = sum(s.space_before for s in styles[1:]) + sum(s.space_after for s in styles[:-1])
+    return gaps, max((s.line for s in styles), default=1.0)
+
+
+def text_height(slide, sh, width: int, font: str) -> int:
+    """Height the frame's text needs as set now (sizes, spacing, insets), as the audit measures it."""
+    paras, styles = paragraph_styles(slide, sh)
+    if not paras:
+        return 0
     l, t, r, b = text_insets(sh)
-    return measure(paragraphs, font, size, width - (l + r - 2 * DEFAULT_INSET_LR), bold,
-                   inset_lr=DEFAULT_INSET_LR, inset_tb=(t + b) // 2).height_emu
+    rich = [(s.size or 14, s.bold, s.space_before, s.space_after, s.line, s.font or font) for s in styles]
+    return measure_rich(paras, rich, width - (l + r - 2 * DEFAULT_INSET_LR), inset_lr=DEFAULT_INSET_LR,
+                        inset_tb=(t + b) // 2).height_emu
 
 
 def grow_frame(sh, room: Room, need: int) -> bool:

@@ -66,6 +66,23 @@ def measure(paragraphs: list[str], family: str, size_pt: float, box_w_emu: int, 
     )
 
 
+# (size pt, bold, space before pt, space after pt, line multiplier, font family)
+ParaStyle = tuple[float, bool, float, float, float, str]
+
+
+def measure_rich(paragraphs: list[str], styles: list[ParaStyle], box_w_emu: int, inset_lr: int = DEFAULT_INSET_LR,
+                 inset_tb: int = DEFAULT_INSET_TB) -> Measure:
+    """Paragraphs with their own size, weight, spacing and line spacing (a bold lead over
+    small body text, bullets with space between them). Spacing counts between paragraphs."""
+    n, lines, h_pt, widest, longest = len(paragraphs), 0, 0.0, 0, 0
+    for i, (p, (size, bold, before, after, line, family)) in enumerate(zip(paragraphs, styles)):
+        m = measure([p], family, size, box_w_emu, bold, inset_lr, 0)
+        lines += m.lines
+        h_pt += m.lines * size * LINE_SPACING * line + (before if i > 0 else 0.0) + (after if i < n - 1 else 0.0)
+        widest, longest = max(widest, m.width_emu), max(longest, m.longest_word_emu)
+    return Measure(lines=lines, height_emu=int(h_pt * EMU_PER_PT + 2 * inset_tb), width_emu=widest, longest_word_emu=longest)
+
+
 def fits(paragraphs: list[str], family: str, size_pt: float, box_w: int, box_h: int, bold: bool = False) -> bool:
     m = measure(paragraphs, family, size_pt, box_w, bold)
     return m.height_emu <= box_h * 1.02 and m.longest_word_emu <= box_w - 2 * DEFAULT_INSET_LR

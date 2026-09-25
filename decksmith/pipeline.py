@@ -24,7 +24,7 @@ from decksmith.audit.engine import run_audit
 from decksmith.audit.fixers import AUTO_SAFE, apply_fixes
 from decksmith.content.ingest import ingest
 from decksmith.core.config import settings
-from decksmith.core.models import AuditReport, ContentCorpus, DeckPlan, Item, PatternKind, TemplateProfile
+from decksmith.core.models import AuditReport, ContentCorpus, DeckPlan, Item, PatternKind, SlideSpec, TemplateProfile
 from decksmith.export.exporters import to_html
 from decksmith.generation.images import generate_images
 from decksmith.generation.llm import LLMClient, Telemetry
@@ -87,18 +87,51 @@ def _bullet_item(b: str) -> Item:
     return Item(title="", text=b.strip(), icon=b)
 
 
+_CONTENT = {PatternKind.text, PatternKind.cards, PatternKind.steps, PatternKind.stats, PatternKind.chart, PatternKind.table,
+            PatternKind.image_text, PatternKind.two_column}
+
+
+def _section_digest(sec: SlideSpec, rest: list[SlideSpec]) -> SlideSpec:
+    """A divider of the analytic variant becomes the summary of its section: its lead line and the
+    conclusions (titles) of its slides. A divider with nothing to summarise stays a divider."""
+    body = []
+    for s in rest:
+        if s.intent in (PatternKind.section, PatternKind.thanks, PatternKind.contacts):
+            break
+        if s.intent in _CONTENT:
+            body.append(s.title)
+    lead = sec.message or sec.subtitle
+    bullets = ([lead] if lead else []) + body[:5]
+    if len(bullets) < 2:
+        return sec
+    return sec.model_copy(deep=True, update={"intent": PatternKind.text, "bullets": bullets, "subtitle": "", "message": ""})
+
+
 def apply_variant(plan: DeckPlan, v: Variant) -> DeckPlan:
     p = plan.model_copy(deep=True)
     slides = p.slides
-    if v.drop_sections:
-        slides = [s for s in slides if s.intent != PatternKind.section]
+    conclusions = [s.title for s in slides if s.intent in _CONTENT]
+    summary_first = False
     if v.exec_summary_first:
         summ = next((s for s in slides if "[summary]" in (s.notes or "") or s.notes == "summary"), None)
+        agenda = next((s for s in slides if s.intent == PatternKind.agenda), None)
+        if summ is None and agenda is not None:
+            # no summary slide in the plan: the table of contents becomes the conclusions up front
+            concl = conclusions[: v.max_bullets]
+            if len(concl) >= 2:
+                agenda.intent, agenda.items, agenda.bullets = PatternKind.text, [], concl
+                agenda.title = "Главное" if p.language == "ru" else "Key takeaways"
+                agenda.notes = (agenda.notes or "") + "\n[summary]"
+                summ = agenda
         if summ is not None:
             slides.remove(summ)
             pos = 2 if len(slides) > 2 and slides[1].intent == PatternKind.agenda else 1
-            summ.title = summ.title
             slides.insert(pos, summ)
+            summary_first = True
+    if v.drop_sections and not summary_first:
+        # no dividers in this variant, but the slide count the user asked for stays (TZ): a divider
+        # sums up its section (with the conclusions up front already, it stays a plain divider)
+        slides = [_section_digest(s, slides[i + 1:]) if s.intent == PatternKind.section else s for i, s in enumerate(slides)]
     if v.prefer_icons:
         for s in slides:  # short bullet lists become icon cards
             if s.intent == PatternKind.text and 3 <= len(s.bullets) <= 5 and all(len(b.split()) <= 14 for b in s.bullets) and not s.items:

@@ -13,7 +13,9 @@ from pathlib import Path
 import yaml
 
 from decksmith.core.config import ROOT
-from decksmith.core.models import DeckPlan, Pattern, PatternKind, SlideLayout, SlideSpec, SlotRole, TemplateProfile
+from decksmith.core.models import Box, DeckPlan, Pattern, PatternKind, SlideLayout, SlideSpec, SlotRole, TemplateProfile
+from decksmith.layout.room import clear_title_box, owned_height
+from decksmith.layout.textfit import fits
 
 K = PatternKind
 
@@ -88,9 +90,25 @@ class Candidate:
     why: list[str]
 
 
+def _row_length(p: Pattern) -> int:
+    """Items in the first row of a repeater laid out as a grid (0 for a single row or column)."""
+    boxes = p.repeaters[0].item_boxes if p.repeaters else []
+    if len(boxes) < 4:
+        return 0
+    top = min(b.y for b in boxes)
+    first = [b for b in boxes if b.y - top < 0.3 * b.h]
+    return len(first) if 1 < len(first) < len(boxes) else 0
+
+
+@lru_cache(maxsize=4096)
+def _title_ratio(title: str, font: str, size: float, bold: bool, w: int, h: int) -> float:
+    """Largest of 100/85/70/60 % of the size at which the title fits the box (0 when none)."""
+    return next((r for r in (1.0, 0.85, 0.7, 0.6) if fits([title], font, size * r, w, h, bold)), 0.0)
+
+
 def score_pattern(p: Pattern, spec: SlideSpec, variant: Variant, used: dict[str, int], prev: str | None,
                   has_image: bool = False, slide_area: int = 0, layout_photo: float = 0.0,
-                  layout_uses: int = 0) -> Candidate | None:
+                  layout_uses: int = 0, title_clear: Box | None = None) -> Candidate | None:
     compat = COMPAT.get(spec.intent, {spec.intent: 1.0})
     w = compat.get(p.kind)
     if w is None or p.kind == K.guide or p.score_hint < 0.2:
@@ -114,6 +132,10 @@ def score_pattern(p: Pattern, spec: SlideSpec, variant: Variant, used: dict[str,
             s += 0.2
             keep = need
             why.append(f"items {need}<{p.n_items} (hide {p.n_items - need})")
+            cols = _row_length(p)
+            if cols and need > cols and need % cols == 1:
+                s -= 1.0  # 4 cards of a 3-column grid: three in a row and one alone below
+                why.append(f"lone item in the last row ({need} in {cols} columns)")
         else:
             return None
     elif need > 0 and spec.intent in ITEM_KINDS:
@@ -147,6 +169,20 @@ def score_pattern(p: Pattern, spec: SlideSpec, variant: Variant, used: dict[str,
         if share > 0.3:
             s -= 1.5 * share
             why.append(f"item slots left empty {share:.0%}")
+    # a title longer than the example's: the part of the title frame that stays clear (before
+    # background art, above a subtitle that starts inside it) may hold it only in smaller type
+    # than on the other slides of the deck
+    t_slot = next((sl for sl in p.slots if sl.role == SlotRole.title and sl.item_index is None and sl.kind == "text"), None)
+    if t_slot is not None and t_slot.style.size and spec.title and spec.intent not in (K.quote,):
+        tb = clear_title_box(t_slot.box, title_clear) or t_slot.box
+        h = tb.h
+        if spec.subtitle or spec.message:
+            h = min(h, owned_height(t_slot, [sl for sl in p.slots if sl.kind == "text" and sl.item_index is None
+                                             and sl.role in (SlotRole.subtitle, SlotRole.body)]))
+        r = _title_ratio(spec.title, t_slot.style.font or "Arial", t_slot.style.size, t_slot.style.bold, tb.w, h)
+        if r < 1.0:
+            s -= {0.85: 0.4, 0.7: 0.9, 0.6: 1.4}.get(r, 2.0)
+            why.append(f"title at {r:.0%} of its size" if r else "title does not fit")
     # free slots that the spec cannot fill leave holes after deletion
     fillable = {SlotRole.title, SlotRole.table, SlotRole.chart, SlotRole.icon, SlotRole.image, SlotRole.decor}
     if spec.subtitle or spec.message:
@@ -156,6 +192,18 @@ def score_pattern(p: Pattern, spec: SlideSpec, variant: Variant, used: dict[str,
     if spec.intent == K.quote and spec.quote_author:
         fillable |= {SlotRole.caption, SlotRole.label, SlotRole.person}
     holes = [sl for sl in p.slots if sl.item_index is None and sl.kind == "text" and sl.role not in fillable]
+    # a divider's / closing slide's lead line (a pitch's call to action) must stay visible: without
+    # a subtitle frame it takes a free caption-like frame, without one it would be lost
+    if (spec.subtitle or spec.message) and spec.intent in (K.section, K.thanks) and not any(
+            sl.kind == "text" and sl.item_index is None and sl.role in (SlotRole.subtitle, SlotRole.body) for sl in p.slots):
+        spare = sorted([sl for sl in holes if sl.role in (SlotRole.person, SlotRole.caption, SlotRole.label)], key=lambda sl: -sl.box.area)
+        if spare:
+            holes.remove(spare[0])
+            s -= 0.5  # a caption frame is a smaller stage for it than a subtitle
+            why.append("lead line in a caption frame")
+        else:
+            s -= 2.0
+            why.append("no frame for the lead line")
     if holes:
         s -= 0.25 * len(holes)
         why.append(f"{len(holes)} unfilled")
@@ -292,7 +340,8 @@ def select_layouts(plan: DeckPlan, profile: TemplateProfile, variant: Variant,
         for p in patterns:
             li = p.layout_index if p.layout_index is not None and 0 <= p.layout_index < len(profile.layouts) else None
             c = score_pattern(p, spec, variant, used, prev, has_image, profile.tokens.slide_w * profile.tokens.slide_h,
-                              profile.layouts[li].photo_share if li is not None else 0.0, photo_uses)
+                              profile.layouts[li].photo_share if li is not None else 0.0, photo_uses,
+                              profile.layouts[li].title_clear if li is not None else None)
             if c:
                 cands.append(c)
         comp = compose_candidates(spec, variant, has_image)

@@ -201,12 +201,17 @@ def detect_repeaters(elements: list[Element], title: Element | None, slide_w: in
             continue
         if len(containing) > 1:
             continue  # shared container (panel behind all cards)
-        # nearest anchor within half spacing
+        # nearest anchor within half spacing; along an axis without spacing (a single column or
+        # row of items) the gap between the boxes decides, not the slide size
         best, best_d = None, None
         for i, a in enumerate(anchors):
             ddx = abs(e.box.cx - a.box.cx)
             ddy = abs(e.box.cy - a.box.cy)
-            if ddx <= max(dx * 0.55, a.box.w * 0.6) and ddy <= max(dy * 0.6, 0.28 * slide_h if arr == "row" else dy * 0.6):
+            gx = max(0, e.box.x - a.box.r, a.box.x - e.box.r)
+            gy = max(0, e.box.y - a.box.b, a.box.y - e.box.b)
+            near_x = gx <= 0.08 * slide_w if dx >= slide_w else ddx <= max(dx * 0.55, a.box.w * 0.6)
+            near_y = gy <= 0.28 * slide_h if dy >= slide_h else ddy <= max(dy * 0.6, 0.28 * slide_h if arr == "row" else dy * 0.6)
+            if near_x and near_y:
                 d = ddx + ddy
                 if best_d is None or d < best_d:
                     best, best_d = i, d

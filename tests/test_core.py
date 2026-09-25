@@ -126,3 +126,42 @@ def test_offline_plan_meets_slide_range():
     for n in (6, 8, 12):
         brief.n_slides = n
         assert len(plan_offline(brief, corpus).slides) == n, n
+
+
+def test_model_plan_is_completed_to_the_requested_count():
+    """A model answering one slide short (seen on a hosted Qwen) still yields the requested count."""
+    from decksmith.core.models import DeckPlan, Item, PatternKind, SlideSpec
+    from decksmith.generation.planner import Brief, Outline, OutlineSlide, _normalize_outline, complete_plan
+
+    o = Outline(title="Колода", slides=[OutlineSlide(intent="title", title="Колода")]
+                + [OutlineSlide(intent="cards", title=f"Вывод {i}") for i in range(8)]
+                + [OutlineSlide(intent="thanks", title="Спасибо")])
+    o = _normalize_outline(o, Brief(text="Колода", n_slides=12, language="ru"))
+    assert len(o.slides) == 12
+    assert o.slides[-2].message == "summary" and o.slides[1].intent == "agenda"
+
+    plan = DeckPlan(title="Колода", slides=[
+        SlideSpec(id="s1", intent=PatternKind.title, title="Колода"),
+        SlideSpec(id="s2", intent=PatternKind.cards, title="Шесть причин", items=[Item(title=f"П{i}") for i in range(6)]),
+        SlideSpec(id="s3", intent=PatternKind.text, title="Главное", notes="\n[summary]"),
+        SlideSpec(id="s4", intent=PatternKind.thanks, title="Спасибо")])
+    complete_plan(plan, 5)
+    assert len(plan.slides) == 5 and [s.id for s in plan.slides] == [f"s{i}" for i in range(1, 6)]
+    assert [len(s.items) for s in plan.slides[1:3]] == [3, 3], "the longest list is split in two"
+    assert plan.slides[3].bullets, "an empty summary lists the conclusions"
+
+
+def test_every_variant_keeps_the_slide_count():
+    """TZ: the number of slides the user asked for holds for all three variants."""
+    from pathlib import Path
+
+    from decksmith.core.models import DeckPlan
+    from decksmith.layout.selector import load_variants
+    from decksmith.pipeline import apply_variant
+
+    plan = DeckPlan.model_validate_json((Path(__file__).parent / "fixtures" / "plan_sample.json").read_text(encoding="utf-8"))
+    for name, v in load_variants().items():
+        vp = apply_variant(plan, v)
+        assert len(vp.slides) == len(plan.slides), name
+    dense = apply_variant(plan, load_variants()["dense"])
+    assert "[summary]" in (dense.slides[1].notes or ""), "the analytic variant opens with its conclusions"
