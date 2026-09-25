@@ -51,6 +51,7 @@ class LLMConfig(BaseModel):
     model: str = "Qwen/Qwen3-32B"
     vlm_model: str = ""  # multimodal model for visual audit / template labelling
     max_concurrency: int = 8
+    max_rps: float = 0.0  # request starts per second per key (0 = no limit); hosted APIs cap it
     timeout_s: float = 120.0
     temperature: float = 0.3
     max_retries: int = 2

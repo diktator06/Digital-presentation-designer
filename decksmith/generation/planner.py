@@ -16,7 +16,7 @@ from collections import Counter
 
 from pydantic import BaseModel, Field
 
-from decksmith.content.ingest import select_context
+from decksmith.content.ingest import NUM_RE, normalize_number, select_context
 from decksmith.core.models import (
     ChartSeries,
     ChartSpec,
@@ -99,6 +99,28 @@ def template_capabilities(profile: TemplateProfile) -> tuple[str, int]:
     titles.sort()
     budget = titles[len(titles) // 2] if titles else 70
     return "\n".join(lines), max(40, min(budget, 90))
+
+
+def section_cap(n_slides: int) -> int:
+    """Dividers only pay off in longer decks: none up to 8 slides, at most two."""
+    return min(2, max(0, (n_slides - 6) // 3))
+
+
+def limit_sections(o: Outline, cap: int) -> int:
+    """Deterministic fallback after the repair round: dividers above the cap, and dividers not
+    followed by content, become content slides (the writer fills them from the materials), so
+    the deck keeps the requested number of slides. Returns how many were converted."""
+    kept, converted = 0, 0
+    for i, s in enumerate(o.slides):
+        if s.intent != "section":
+            continue
+        nxt = o.slides[i + 1].intent if i + 1 < len(o.slides) else "end"
+        if kept < cap and nxt not in ("section", "thanks", "contacts", "end"):
+            kept += 1
+            continue
+        s.intent = "text"
+        converted += 1
+    return converted
 
 
 def _normalize_outline(o: Outline, brief: Brief) -> Outline:
@@ -214,11 +236,64 @@ def _lang_ok(text: str, lang: str) -> bool:
     return cyr >= 0.5 if lang == "ru" else cyr < 0.5
 
 
+# workflow words a model sometimes puts into a title instead of writing one (ru, en)
+_SERVICE_TITLES = {
+    "summary": ("Главное", "Key takeaways"), "conclusion": ("Главное", "Key takeaways"),
+    "conclusions": ("Главное", "Key takeaways"), "key takeaways": ("Главное", "Key takeaways"),
+    "agenda": ("Содержание", "Agenda"), "outline": ("Содержание", "Agenda"), "contents": ("Содержание", "Agenda"),
+    "introduction": ("Введение", "Introduction"), "intro": ("Введение", "Introduction"),
+}
+_CONTENT_INTENTS = {"text", "cards", "steps", "stats", "chart", "table", "image_text", "two_column"}
+
+
+def _service_title(title: str) -> bool:
+    return re.sub(r"[^a-zа-яё ]+", "", title.lower()).strip() in _SERVICE_TITLES
+
+
+def _digits(text: str) -> set[str]:
+    """Normalised numbers of a text (same normalisation as the numbers audit)."""
+    return {re.sub(r"[^\d.]", "", normalize_number(m.group(0))).lstrip("0") for m in NUM_RE.finditer(text or "")}
+
+
+def _unsourced(text: str, known: set[str]) -> list[str]:
+    """Numbers of `text` (2+ digits, not years) that are not among `known`."""
+    out = []
+    for m in NUM_RE.finditer(text or ""):
+        d = re.sub(r"[^\d.]", "", normalize_number(m.group(0).strip()))
+        if len(d.replace(".", "")) < 2 or re.fullmatch(r"(19|20)\d\d", d):
+            continue
+        if d.lstrip("0") not in known:
+            out.append(m.group(0).strip())
+    return out
+
+
+def drop_unsourced(plan: DeckPlan, corpus: ContentCorpus, brief_text: str) -> int:
+    """Fact guard before layout: bullets and items with numbers that are not in the materials
+    (models invent plausible metrics) are dropped, as long as the slide keeps some content.
+    Returns the number of dropped lines; the numbers audit still reports what remains."""
+    known = {re.sub(r"[^\d.]", "", n).lstrip("0") for n in corpus.numbers} | _digits(brief_text)
+    dropped = 0
+    for s in plan.slides:
+        bullets = [b for b in s.bullets if not _unsourced(b, known)]
+        if bullets and len(bullets) < len(s.bullets):
+            dropped += len(s.bullets) - len(bullets)
+            s.bullets = bullets
+        items = [it for it in s.items if not _unsourced(f"{it.value} {it.title} {it.text}", known)]
+        if items and len(items) < len(s.items):
+            dropped += len(s.items) - len(items)
+            s.items = items
+    return dropped
+
+
 def sanitize_plan(plan: DeckPlan, outline: Outline | None = None) -> DeckPlan:
-    """Deck-level guards against model slips: wrong-language titles, duplicate slides."""
+    """Deck-level guards against model slips: workflow words and wrong-language titles,
+    duplicate slides."""
     seen: set[str] = set()
     out = []
     for i, s in enumerate(plan.slides):
+        if _service_title(s.title):
+            ru, en = _SERVICE_TITLES[re.sub(r"[^a-zа-яё ]+", "", s.title.lower()).strip()]
+            s.title = ru if plan.language == "ru" else en
         if not _lang_ok(s.title, plan.language) and outline and i < len(outline.slides) and _lang_ok(outline.slides[i].title, plan.language):
             s.title = outline.slides[i].title
         key = re.sub(r"\W+", " ", s.title.lower()).strip()
@@ -241,16 +316,34 @@ async def plan_with_llm(brief: Brief, corpus: ContentCorpus, profile: TemplatePr
 
     brief_stems = {w[:6] for w in re.findall(r"[a-zа-яё]{5,}", brief.text.lower())}
 
+    cap = section_cap(brief.n_slides)
+
     def check_outline(o: Outline) -> str | None:
+        """All problems at once (a repair that fixes one must not break another), plus the count."""
+        problems = []
         titles = [re.sub(r"\W+", " ", s.title.lower()).strip() for s in o.slides if s.title.strip()]
         distinct = len(set(titles))
         if distinct < lo:
-            return (f"в структуре {distinct} разных слайдов, нужно {brief.n_slides}: у каждого слайда свой "
-                    f"заголовок-вывод, без повторов")
+            problems.append(f"в структуре {distinct} разных слайдов, нужно {brief.n_slides}: у каждого слайда свой "
+                            f"заголовок-вывод, без повторов")
         head = {w[:6] for w in re.findall(r"[a-zа-яё]{5,}", f"{o.title} {o.subtitle}".lower())}
         if brief_stems and not head & brief_stems:
-            return f"название и подзаголовок презентации не отражают бриф; тема брифа: «{brief.text[:160]}»"
-        return None
+            problems.append(f"название и подзаголовок презентации не отражают бриф; тема брифа: «{brief.text[:160]}»")
+        intents = [s.intent.strip().lower() for s in o.slides]
+        if intents.count("section") > cap:
+            problems.append(f"слишком много слайдов-разделов (section): {intents.count('section')}, допустимо не больше "
+                            f"{cap}; замени лишние содержательными слайдами (cards, steps, stats, text) с фактами из материалов")
+        if any(a == "section" and b in ("section", "thanks", "contacts", "end")
+               for a, b in zip(intents, intents[1:] + ["end"])):
+            problems.append("после слайда-раздела должен идти содержательный слайд: убери раздел перед финалом и разделы подряд")
+        service = [s.title for s in o.slides if _service_title(s.title)]
+        if service:
+            problems.append(f"«{service[0]}» — служебное слово, а не заголовок: у каждого слайда заголовок-вывод "
+                            f"на языке {brief.language}")
+        if not problems:
+            return None
+        return "; ".join(problems) + f". В ответе должно быть ровно {brief.n_slides} слайдов."
+
 
     o = await llm.run_skill(
         outline_skill, Outline, validate=check_outline, brief=brief.text, purpose=brief.purpose,
@@ -258,6 +351,7 @@ async def plan_with_llm(brief: Brief, corpus: ContentCorpus, profile: TemplatePr
         context=context, language=brief.language, title_chars=title_chars,
     )
     o = _normalize_outline(o, brief)
+    limit_sections(o, cap)
     writer = skill_for_step(agent, "write_slides", "slide_writer")
     wctx = select_context(corpus, brief.text, budget_chars=9000)
 
@@ -277,7 +371,65 @@ async def plan_with_llm(brief: Brief, corpus: ContentCorpus, profile: TemplatePr
     written = await asyncio.gather(*[write(i, s) for i, s in enumerate(o.slides)])
     specs = [_to_spec(i, s, w) for i, (s, w) in enumerate(zip(o.slides, written))]
     plan = DeckPlan(title=o.title, subtitle=o.subtitle, purpose=brief.purpose, language=brief.language, slides=specs)
-    return sanitize_plan(plan, o)
+    plan = sanitize_plan(plan, o)
+    dropped = drop_unsourced(plan, corpus, brief.text)
+    if dropped:
+        log.info("fact guard: %d lines with numbers absent from the materials dropped", dropped)
+    if agent.enabled("headlines"):
+        try:
+            await _headlines(plan, llm, agent, title_chars, brief.language)
+        except Exception as e:  # titles from the writer stay
+            log.warning("headlines step failed: %s", e)
+    return plan
+
+
+async def _headlines(plan: DeckPlan, llm: LLMClient, agent: Agent, title_chars: int, language: str) -> None:
+    """One call rewrites the titles of content slides into conclusions drawn from their own
+    content (TZ Appendix 1, question 1). A new title is taken only if it keeps the language,
+    fits the budget and brings no number that the slide does not already contain."""
+    targets = [(i, s) for i, s in enumerate(plan.slides) if s.intent.value in _CONTENT_INTENTS]
+    if not targets:
+        return
+    rows, source = [], {}
+    for i, s in targets:
+        body = s.bullets or [" ".join(x for x in (it.value, it.title, it.text) if x) for it in s.items]
+        if not body and s.chart:
+            body = [f"{s.chart.y_title or s.chart.unit}: " + ", ".join(f"{c} {v}" for c, v in
+                                                                 zip(s.chart.categories, s.chart.series[0].values))]
+        if not body and s.table:
+            body = [", ".join(s.table.columns)] + [", ".join(str(c) for c in r) for r in s.table.rows[:4]]
+        content = "; ".join(body)[:320] or s.message
+        rows.append({"n": i + 1, "intent": s.intent.value, "title": s.title, "content": content})
+        source[i] = f"{s.title} {content} {s.subtitle}"
+    skill = skill_for_step(agent, "headlines", "headline")
+    res = await llm.run_skill(skill, None, deck_title=plan.title, slides=rows, title_chars=title_chars, language=language)
+    got = [t for t in (res.get("titles", []) if isinstance(res, dict) else []) if isinstance(t, dict)]
+    ns = [i + 1 for i, _ in targets]
+    keys = []
+    for t in got:
+        try:
+            keys.append(int(t.get("n", 0)))
+        except (TypeError, ValueError):
+            keys.append(0)
+    if keys and all(k in ns for k in keys):  # answered with slide numbers
+        by_n = {k: str(t.get("title", "")).strip().rstrip(".") for k, t in zip(keys, got)}
+    elif len(got) == len(targets):  # numbered by position in the list instead
+        by_n = {n: str(t.get("title", "")).strip().rstrip(".") for n, t in zip(ns, got)}
+    else:
+        by_n = {}
+    changed = 0
+    for i, s in targets:
+        new = by_n.get(i + 1, "")
+        if not new or new == s.title or len(new) > title_chars + 20 or not _lang_ok(new, language) or _service_title(new):
+            continue
+        if _unsourced(new, _digits(source[i])):
+            continue  # a headline must not bring numbers of its own
+        stems = {w[:5] for w in re.findall(r"[a-zа-яё]{5,}", source[i].lower())}
+        if stems and not {w[:5] for w in re.findall(r"[a-zа-яё]{5,}", new.lower())} & stems:
+            continue  # shares no word with its slide: an answer meant for another slide
+        s.title = new
+        changed += 1
+    log.info("headlines: %d of %d titles rewritten as conclusions", changed, len(targets))
 
 
 # ----------------------------------------------------------------------------

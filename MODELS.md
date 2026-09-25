@@ -12,7 +12,7 @@ LM Studio, облачный провайдер или инференс VK для
 | VLM (визуальный аудит, опционально разметка шаблона) | Qwen2.5-VL-32B-Instruct | 32B | Apache 2.0 | скиллы `visual_audit`, `pattern_labeler` | https://huggingface.co/Qwen/Qwen2.5-VL-32B-Instruct |
 | VLM (альтернатива) | Qwen3-VL-30B-A3B-Instruct | 30B MoE | Apache 2.0 | то же | https://huggingface.co/Qwen/Qwen3-VL-30B-A3B-Instruct |
 | Text-to-image (иллюстрации в слайдах) | FLUX.1 [schnell] | 12B | Apache 2.0 | `generation/images.py`, 4 шага | https://huggingface.co/black-forest-labs/FLUX.1-schnell |
-| Инференс финала | модель VK (Qwen, 27B) | ≤ 35B | по условиям организатора | все LLM-скиллы — смена `DECKSMITH_LLM_BASE_URL`/`MODEL` | — |
+| Инференс финала | **Qwen 3.8 27B** от VK (ТЗ: «командам топ-10 предоставляется модель Qwen 3.8 27b; использование инференса VK обязательно») | 27B | по условиям организатора | все LLM-скиллы и визуальный аудит — смена `DECKSMITH_LLM_BASE_URL`/`MODEL`/`VLM_MODEL` | — |
 
 Не-генеративные компоненты (детерминированные, CPU): LibreOffice (рендер PPTX→PDF, MPL-2.0),
 PyMuPDF (PDF→PNG/SVG, AGPL-3.0 — допустимо для open-source репозитория), python-pptx (MIT),
@@ -59,6 +59,40 @@ image:
 Отключение «мышления» Qwen3 зависит от сервера и задаётся в конфиге, а не в коде:
 vLLM — `extra_body: {chat_template_kwargs: {enable_thinking: false}}`, Ollama —
 `extra_body: {reasoning_effort: none}` (см. `config/local_ollama.yaml`).
+
+## Подключение через хостинг (VseGPT) — проверено
+
+Любой OpenAI-совместимый хостинг подключается через `.env` (не хранится в git), без правки кода:
+
+```bash
+DECKSMITH_CONFIG=config/vsegpt.yaml          # профиль для хостингов в стиле OpenRouter
+DECKSMITH_LLM_BASE_URL=https://api.vsegpt.ru/v1
+DECKSMITH_LLM_API_KEY=...
+DECKSMITH_LLM_MODEL=qwen/qwen3-32b           # план и тексты
+DECKSMITH_VLM_MODEL=qwen/qwen3.8-27b         # смысловой аудит по картинке слайда
+```
+
+Что выяснилось на живом сервисе и учтено в `config/vsegpt.yaml` и клиенте:
+
+* Qwen3 на хостинге по умолчанию «размышляет» (до 2.3 тыс. лишних токенов и ~30 с на ответ);
+  переключатель vLLM (`chat_template_kwargs`) хостинг игнорирует, работает параметр OpenRouter
+  `reasoning: {enabled: false}`.
+* Лимит «не больше 1 запроса в секунду» на ключ: клиент выдерживает темп (`max_rps: 0.7`), ответы
+  429/5xx повторяются с паузой (`Retry-After` или экспоненциальная); в первом прогоне без этого
+  55 из 91 запроса получили отказ, после — 0.
+* `qwen/qwen3.6-35b-a3b`: текст отвечает за ~2 с, запросы с картинкой в момент проверки получали
+  429 у поставщика; для аудита по картинке использована `qwen/qwen3.8-27b`.
+
+Сквозной прогон (`decksmith run configs/real_model_e2e.yaml`: шаблон vk_education, контент — ТЗ,
+12 слайдов, 3 варианта, аудит по картинке каждого слайда): **2 мин 13 с – 2 мин 53 с** от старта
+до трёх колод в PPTX/PDF/HTML, из них план и тексты — 83–123 с (MacBook Air M1: рендер и аудит
+локально, модели — на хостинге). Модель со зрением действительно находит смысловые дефекты
+Приложения 1: «заголовок называет тему, а не вывод», пустой слайд-раздел, текст под графикой.
+
+Стоимость: основная часть — аудит по картинке (по запросу на каждый слайд каждого варианта) на
+более дорогой модели; тексты на `qwen3-32b` дёшевы. В финале инференс VK бесплатен для команды,
+но при тестах на платном хостинге аудит по картинке стоит включать выборочно
+(`pipeline.visual_audit: false` в профиле).
 
 ## Проверено на реальной модели
 

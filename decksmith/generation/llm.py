@@ -96,6 +96,8 @@ class LLMClient:
         self.cfg = cfg or settings().llm
         self.telemetry = telemetry or Telemetry()
         self._sem = asyncio.Semaphore(self.cfg.max_concurrency)
+        self._rate_lock = asyncio.Lock()
+        self._next_start = 0.0  # monotonic time of the next allowed request start (max_rps)
         self._client: httpx.AsyncClient | None = None
         self._transport = transport  # tests plug an in-process OpenAI-compatible emulator here
 
@@ -110,6 +112,17 @@ class LLMClient:
     async def __aexit__(self, *exc):
         if self._client:
             await self._client.aclose()
+
+    async def _pace(self) -> None:
+        """Space request starts to `max_rps` (hosted APIs reject bursts with HTTP 429)."""
+        if self.cfg.max_rps <= 0:
+            return
+        async with self._rate_lock:
+            now = time.monotonic()
+            wait = self._next_start - now
+            self._next_start = max(now, self._next_start) + 1.0 / self.cfg.max_rps
+        if wait > 0:
+            await asyncio.sleep(wait)
 
     def _model(self, kind: str) -> str:
         if kind == "vlm":
@@ -137,6 +150,7 @@ class LLMClient:
             t0 = time.time()
             try:
                 async with self._sem:
+                    await self._pace()
                     client = self._client or httpx.AsyncClient(timeout=self.cfg.timeout_s, transport=self._transport)
                     r = await client.post(url, json=body, headers=headers)
                     if self._client is None:

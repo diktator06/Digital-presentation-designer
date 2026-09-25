@@ -30,6 +30,7 @@ from pathlib import Path
 
 from PIL import Image, ImageFilter, ImageStat
 from pptx import Presentation
+from pptx.oxml.ns import qn
 
 from decksmith.core.config import settings
 from decksmith.core.fonts import DOWNLOAD_BUDGET_S, ensure_font
@@ -251,6 +252,41 @@ def region_color(png: Path, box: Box, slide_w: int, slide_h: int) -> str | None:
     pal = q.getpalette()
     i = counts[0][1]
     return rgb_to_hex((pal[i * 3], pal[i * 3 + 1], pal[i * 3 + 2]))
+
+
+def layout_photo_share(layout, slide_w: int, slide_h: int) -> float:
+    """Share of the slide covered by opaque raster pictures that the layout itself draws
+    (not placeholders): a photo collage baked into a layout shows on every slide built on it,
+    whatever the slide is about. Transparent PNG art (logos, 3D shapes) does not count."""
+    from io import BytesIO
+
+    total = 0
+    stack = list(layout.shapes)
+    while stack:
+        shp = stack.pop()
+        if shp.shape_type == 6:  # group
+            stack.extend(shp.shapes)
+            continue
+        if getattr(shp, "is_placeholder", False) or shp.width is None or shp.height is None:
+            continue
+        blip = shp._element.find(".//" + qn("a:blip"))
+        rid = blip.get(qn("r:embed")) if blip is not None else None
+        if not rid:
+            continue
+        try:
+            im = Image.open(BytesIO(layout.part.related_part(rid).blob))
+            if im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info):
+                if im.convert("RGBA").getchannel("A").resize((32, 32)).getextrema()[0] < 200:
+                    continue  # cut-out art, not a photo
+        except Exception:
+            continue
+        x0, y0 = max(int(shp.left), 0), max(int(shp.top), 0)
+        x1, y1 = min(int(shp.left + shp.width), slide_w), min(int(shp.top + shp.height), slide_h)
+        area = max(x1 - x0, 0) * max(y1 - y0, 0)
+        if area > 0.85 * slide_w * slide_h:
+            continue  # full-bleed background image, not a picture on the slide
+        total += area
+    return round(min(total / (slide_w * slide_h), 1.0), 3)
 
 
 def region_colors(png: Path, box: Box, slide_w: int, slide_h: int, min_share: float = 0.1) -> list[str]:
@@ -488,6 +524,7 @@ def analyze_template(path: str | Path, *, name: str | None = None, force: bool =
             title_box=Box(**title_ph["box"]) if title_ph else None,
             painted_idx=[p["idx"] for p in phs if p["painted"] and p["type"] not in
                          ("TITLE", "CENTER_TITLE", "FOOTER", "DATE", "SLIDE_NUMBER")],
+            photo_share=layout_photo_share(layout, sw, sh),
         )
         if gi < len(layout_cv):
             li.dark, li.background_hex, _ = layout_cv[gi]

@@ -11,6 +11,7 @@ llm:
   model: ${DECKSMITH_LLM_MODEL:-qwen/qwen3-32b}
   vlm_model: ${DECKSMITH_VLM_MODEL:-}
   max_concurrency: 8
+  max_rps: 0.7            # VseGPT: "no more than 1 request per 1.0 second" per key (with margin)
   timeout_s: 120
   temperature: 0.3
   max_retries: 3

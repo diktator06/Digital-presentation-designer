@@ -239,6 +239,7 @@ class LayoutInfo(BaseModel):
     name: str
     placeholders: list[dict[str, Any]] = Field(default_factory=list)
     painted_idx: list[int] = Field(default_factory=list)  # content placeholders that paint a fill/outline
+    photo_share: float = 0.0  # slide area covered by opaque pictures the layout itself draws (photo collages)
     dark: bool = False
     has_title: bool = False
     body_count: int = 0

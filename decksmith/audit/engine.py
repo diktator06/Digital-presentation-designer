@@ -65,8 +65,8 @@ async def visual_audit(ctx: AuditContext, llm: LLMClient, agent: Agent) -> list[
         for q, val in answers.items():
             if q not in VLM_QUESTIONS or val is not False:
                 continue
-            if kind in ("title", "section", "thanks", "quote", "contacts") and q in ("q1", "q3", "q5", "q10"):
-                continue  # covers/dividers do not carry an argument
+            if kind in ("title", "section", "thanks", "quote", "contacts") and q in ("q1", "q2", "q3", "q5", "q10"):
+                continue  # covers/dividers carry no argument and no body by design
             cid, title, fixer = VLM_QUESTIONS[q]
             out.append(AuditIssue(
                 id=f"{cid}#{i}", check=cid, category="content" if q.startswith("q") else "layout", deterministic=False,

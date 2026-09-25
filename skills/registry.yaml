@@ -4,6 +4,7 @@
 skills:
   outline:          {active: v1}
   slide_writer:     {active: v1}
+  headline:         {active: v1}
   shortener:        {active: v1}
   visual_audit:     {active: v1}
   fixer:            {active: v1}
@@ -11,4 +12,4 @@ skills:
   image_style:      {active: v1}
   json_repair:      {active: v1}
 agents:
-  deck_agent:       {active: v1}
+  deck_agent:       {active: v2}

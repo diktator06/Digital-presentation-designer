@@ -89,7 +89,8 @@ class Candidate:
 
 
 def score_pattern(p: Pattern, spec: SlideSpec, variant: Variant, used: dict[str, int], prev: str | None,
-                  has_image: bool = False, slide_area: int = 0) -> Candidate | None:
+                  has_image: bool = False, slide_area: int = 0, layout_photo: float = 0.0,
+                  layout_uses: int = 0) -> Candidate | None:
     compat = COMPAT.get(spec.intent, {spec.intent: 1.0})
     w = compat.get(p.kind)
     if w is None or p.kind == K.guide or p.score_hint < 0.2:
@@ -177,6 +178,11 @@ def score_pattern(p: Pattern, spec: SlideSpec, variant: Variant, used: dict[str,
         if share > 0.01:
             s -= min(3.0, 12.0 * share)
             why.append(f"empty painted frames {share:.0%}")
+    # photos baked into the layout show on every slide built on it, whatever it is about:
+    # fine for a cover or a divider, off-topic next to content, and never twice in a deck
+    if layout_photo > 0.15 and spec.intent not in (K.title, K.section, K.thanks):
+        s -= 1.0 + 2.0 * layout_uses
+        why.append(f"layout photos {layout_photo:.0%}" + (f", used x{layout_uses}" if layout_uses else ""))
     # photo frames stay empty (and are removed) without an image: the freed area is a hole too
     if not has_image and slide_area:
         pic = sum(sl.box.area for sl in p.slots if sl.kind == "picture" and sl.role == SlotRole.image
@@ -275,6 +281,7 @@ def select_layouts(plan: DeckPlan, profile: TemplateProfile, variant: Variant,
     is preferred so the three variants differ visibly while staying on-template."""
     patterns = profile.usable_patterns()
     used: dict[str, int] = {}
+    photo_uses = 0  # slides already on layouts with baked-in photos (collages often repeat across layouts)
     prev: str | None = None
     out: list[SlideLayout] = []
     avoid = avoid or {}
@@ -283,7 +290,9 @@ def select_layouts(plan: DeckPlan, profile: TemplateProfile, variant: Variant,
         has_image = spec.id in images
         cands: list[Candidate] = []
         for p in patterns:
-            c = score_pattern(p, spec, variant, used, prev, has_image, profile.tokens.slide_w * profile.tokens.slide_h)
+            li = p.layout_index if p.layout_index is not None and 0 <= p.layout_index < len(profile.layouts) else None
+            c = score_pattern(p, spec, variant, used, prev, has_image, profile.tokens.slide_w * profile.tokens.slide_h,
+                              profile.layouts[li].photo_share if li is not None else 0.0, photo_uses)
             if c:
                 cands.append(c)
         comp = compose_candidates(spec, variant, has_image)
@@ -308,6 +317,10 @@ def select_layouts(plan: DeckPlan, profile: TemplateProfile, variant: Variant,
         rationale = f"{best.mode}:{best.pattern.id if best.pattern else ''} score={best.score:.2f} [{'; '.join(best.why)}] alt: {alt}"
         if best.pattern:
             used[best.pattern.id] = used.get(best.pattern.id, 0) + 1
+            bl = best.pattern.layout_index
+            if bl is not None and 0 <= bl < len(profile.layouts) and profile.layouts[bl].photo_share > 0.15 \
+                    and spec.intent not in (K.title, K.section, K.thanks):
+                photo_uses += 1
             prev = best.pattern.id
             out.append(SlideLayout(spec_id=spec.id, mode="clone", pattern_id=best.pattern.id, keep_items=best.keep_items, rationale=rationale))
         else:
