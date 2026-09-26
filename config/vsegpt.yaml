@@ -8,7 +8,7 @@ llm:
   provider: ${DECKSMITH_LLM_PROVIDER:-openai_compatible}
   base_url: ${DECKSMITH_LLM_BASE_URL:-https://api.vsegpt.ru/v1}
   api_key: ${DECKSMITH_LLM_API_KEY:-}
-  model: ${DECKSMITH_LLM_MODEL:-qwen/qwen3-32b}
+  model: ${DECKSMITH_LLM_MODEL:-qwen/qwen3.6-35b-a3b}
   vlm_model: ${DECKSMITH_VLM_MODEL:-}
   max_concurrency: 8
   max_rps: 0.7            # VseGPT: "no more than 1 request per 1.0 second" per key (with margin)

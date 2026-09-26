@@ -8,11 +8,13 @@ LM Studio, облачный провайдер или инференс VK для
 | Роль | Модель по умолчанию | Параметры | Лицензия | Где используется | Hugging Face |
 |---|---|---|---|---|---|
 | LLM (план, тексты, сокращение, исправления) | Qwen3-32B | 32.8B, dense | Apache 2.0 | скиллы `outline`, `slide_writer`, `shortener`, `fixer` | https://huggingface.co/Qwen/Qwen3-32B |
+| LLM на хостинге (отборочный этап, по умолчанию в `config/vsegpt.yaml`) | Qwen3.6-35B-A3B | 35B MoE, 3B активных | Apache 2.0 | все текстовые скиллы: `outline`, `slide_writer`, `headline`, `shortener`, `fixer` | https://huggingface.co/Qwen/Qwen3.6-35B-A3B |
 | LLM (быстрая альтернатива) | Qwen3-30B-A3B-Instruct-2507 | 30.5B MoE, ≈3.3B активных | Apache 2.0 | те же скиллы при дефиците скорости | https://huggingface.co/Qwen/Qwen3-30B-A3B-Instruct-2507 |
-| VLM (визуальный аудит, опционально разметка шаблона) | Qwen2.5-VL-32B-Instruct | 32B | Apache 2.0 | скиллы `visual_audit`, `pattern_labeler` | https://huggingface.co/Qwen/Qwen2.5-VL-32B-Instruct |
+| VLM на хостинге (визуальный аудит; модель финала) | Qwen3.8-27B | 27B dense, текст + изображения | Apache 2.0 | скиллы `visual_audit`, `pattern_labeler` | https://huggingface.co/Qwen/Qwen3.8-27B |
+| VLM на своём GPU | Qwen2.5-VL-32B-Instruct | 32B | Apache 2.0 | те же скиллы | https://huggingface.co/Qwen/Qwen2.5-VL-32B-Instruct |
 | VLM (альтернатива) | Qwen3-VL-30B-A3B-Instruct | 30B MoE | Apache 2.0 | то же | https://huggingface.co/Qwen/Qwen3-VL-30B-A3B-Instruct |
 | Text-to-image (иллюстрации в слайдах) | FLUX.1 [schnell] | 12B | Apache 2.0 | `generation/images.py`, 4 шага | https://huggingface.co/black-forest-labs/FLUX.1-schnell |
-| Инференс финала | **Qwen 3.8 27B** от VK (ТЗ: «командам топ-10 предоставляется модель Qwen 3.8 27b; использование инференса VK обязательно») | 27B | по условиям организатора | все LLM-скиллы и визуальный аудит — смена `DECKSMITH_LLM_BASE_URL`/`MODEL`/`VLM_MODEL` | — |
+| Инференс финала | **Qwen 3.8 27B** от VK (ТЗ: «командам топ-10 предоставляется модель Qwen 3.8 27b; использование инференса VK обязательно») | 27B dense, мультимодальная | Apache 2.0 | все LLM-скиллы и визуальный аудит — смена `DECKSMITH_LLM_BASE_URL`/`MODEL`/`VLM_MODEL` | https://huggingface.co/Qwen/Qwen3.8-27B |
 
 Не-генеративные компоненты (детерминированные, CPU): LibreOffice (рендер PPTX→PDF, MPL-2.0),
 PyMuPDF (PDF→PNG/SVG, AGPL-3.0 — допустимо для open-source репозитория), python-pptx (MIT),
@@ -20,8 +22,10 @@ Pillow/FreeType (замер текста), Lucide icons (ISC).
 
 ## Почему так
 
-* **Qwen3-32B** — сильнейшая Apache-2.0 модель ≤35B для русского языка и строгого JSON;
-  thinking-режим отключается (`chat_template_kwargs.enable_thinking=false`) ради скорости.
+* **Qwen3-32B** — сильная Apache-2.0 модель ≤35B для русского языка и строгого JSON на своём GPU;
+  thinking-режим отключается (`chat_template_kwargs.enable_thinking=false`) ради скорости. На
+  хостинге быстрее и без раундов починки отвечает **Qwen3.6-35B-A3B** (замер ниже), а смысловой
+  аудит по картинке идёт на **Qwen3.8-27B** — той же модели, что даёт VK в финале.
 * **Две стадии генерации** (outline → параллельные slide_writer) вместо одного длинного JSON:
   меньше латентность и меньше риск сломанного вывода; 12 коротких вызовов идут параллельно.
 * **VLM только в аудите**: смысловые вопросы Приложения 1 требуют картинку слайда; всё, что
@@ -68,7 +72,7 @@ vLLM — `extra_body: {chat_template_kwargs: {enable_thinking: false}}`, Ollama 
 DECKSMITH_CONFIG=config/vsegpt.yaml          # профиль для хостингов в стиле OpenRouter
 DECKSMITH_LLM_BASE_URL=https://api.vsegpt.ru/v1
 DECKSMITH_LLM_API_KEY=...
-DECKSMITH_LLM_MODEL=qwen/qwen3-32b           # план и тексты
+DECKSMITH_LLM_MODEL=qwen/qwen3.6-35b-a3b     # план и тексты
 DECKSMITH_VLM_MODEL=qwen/qwen3.8-27b         # смысловой аудит по картинке слайда
 ```
 
@@ -80,8 +84,20 @@ DECKSMITH_VLM_MODEL=qwen/qwen3.8-27b         # смысловой аудит п�
 * Лимит «не больше 1 запроса в секунду» на ключ: клиент выдерживает темп (`max_rps: 0.7`), ответы
   429/5xx повторяются с паузой (`Retry-After` или экспоненциальная); в первом прогоне без этого
   55 из 91 запроса получили отказ, после — 0.
-* `qwen/qwen3.6-35b-a3b`: текст отвечает за ~2 с, запросы с картинкой в момент проверки получали
-  429 у поставщика; для аудита по картинке использована `qwen/qwen3.8-27b`.
+* Выбор текстовой модели — по замеру на одних и тех же входах (26.09.2026, бриф «КофеБот»,
+  шаблон vk_workspace, 14 слайдов; цены VseGPT за 1 тыс. токенов):
+
+  | Модель | Шаг `outline` (строгий JSON, ровно 14 слайдов) | Визуальный аудит одного слайда |
+  |---|---|---|
+  | `qwen/qwen3-32b` | 122 с, нужен раунд починки, 31 тыс. + 10 тыс. токенов, ≈1.0 ₽; заголовки-темы | — (без зрения) |
+  | `qwen/qwen3.6-35b-a3b` | **11 с**, с первого раза, 3.9 тыс. + 1.3 тыс. токенов, ≈0.6 ₽ | 4 с, ≈0.15 ₽, нашла пустые карточки |
+  | `qwen/qwen3.8-27b` | 13 с, с первого раза, ≈1.9 ₽; лучшие заголовки-выводы | 9 с, ≈0.30 ₽, нашла пустые карточки |
+
+  Сквозной прогон на `qwen3.6-35b-a3b` (`configs/real_model_smoke.yaml`, 8 слайдов, аудит на
+  `qwen3.8-27b`): план и тексты **45 с** (на `qwen3-32b` — около 100 с), колода целиком 67 с,
+  23 вызова, 6 из 6 заголовков переписаны в выводы, балл аудита 98 без замечаний. Поэтому на
+  хостинге тексты пишет `qwen3.6-35b-a3b` (35B по сумме весов — в пределе ТЗ «до 35B»), а смысловой
+  аудит делает `qwen3.8-27b` — модель финала. `qwen3-32b` остаётся рабочей альтернативой.
 
 Сквозной прогон (`decksmith run configs/real_model_e2e.yaml`: шаблон vk_education, контент — ТЗ,
 12 слайдов, 3 варианта, аудит по картинке каждого слайда): **2 мин 13 с – 2 мин 53 с** от старта

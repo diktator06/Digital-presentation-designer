@@ -79,7 +79,7 @@ python scripts/stress.py <шаблоны...> --synthetic  # слепой стр�
 | `DECKSMITH_LLM_PROVIDER` | `openai_compatible` или `offline` | `openai_compatible` |
 | `DECKSMITH_LLM_BASE_URL` | OpenAI-совместимый endpoint (vLLM, Ollama, провайдер, инференс VK) | — (пусто = офлайн) |
 | `DECKSMITH_LLM_API_KEY` | ключ endpoint | — |
-| `DECKSMITH_LLM_MODEL` | модель для текстовых скиллов | `Qwen/Qwen3-32B` |
+| `DECKSMITH_LLM_MODEL` | модель для текстовых скиллов | `Qwen/Qwen3-32B` (свой GPU), `qwen/qwen3.6-35b-a3b` в профиле `config/vsegpt.yaml` |
 | `DECKSMITH_VLM_MODEL` | мультимодальная модель для визуального аудита | — (визуальный аудит выключен) |
 | `DECKSMITH_IMAGE_PROVIDER` | `none` / `openai_images` | `none` |
 | `DECKSMITH_IMAGE_BASE_URL`, `DECKSMITH_IMAGE_API_KEY`, `DECKSMITH_IMAGE_MODEL` | text-to-image | FLUX.1-schnell |
