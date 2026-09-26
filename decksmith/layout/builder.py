@@ -53,9 +53,12 @@ from decksmith.layout.pptx_ops import (
     table_has_merges,
 )
 from decksmith.layout.selector import Variant
+from pptx.enum.shapes import MSO_SHAPE_TYPE
 from pptx.enum.text import MSO_ANCHOR
 
-from decksmith.layout.room import clear_title_box, grow_frame, owned_height, paragraph_styles, spacing, text_height, text_room
+from decksmith.layout.room import (clear_title_box, draws, grow_frame, is_plate, owned_height, paragraph_styles, spacing,
+                                   text_height, text_room)
+from decksmith.parsing.ooxml import flatten_shapes
 from decksmith.layout.textfit import DEFAULT_INSET_TB, fit_composite, fit_font_size, max_chars_for, measure, snap_down
 from decksmith.parsing.ooxml import contrast_ratio, rel_luminance
 from decksmith.parsing.template_parser import region_color, region_colors
@@ -425,6 +428,19 @@ class DeckBuilder:
                 fills[spare[0].id] = ([once(lead)], None)
                 lead_slot = spare[0]
 
+        # a content slide's lead line that found no subtitle frame goes to a free note frame that sits
+        # on a plate (a takeaway band of the example) rather than leaving the band empty
+        lead = spec.subtitle or spec.message
+        if spec.intent not in (PatternKind.title, PatternKind.section, PatternKind.thanks, PatternKind.quote) and lead \
+                and lead not in used_texts:
+            plates = [r.box for r in flatten_shapes(slide.shapes) if r.shape.shape_type != MSO_SHAPE_TYPE.GROUP
+                      and is_plate(r.shape) and r.box.area < 0.85 * self.profile.tokens.slide_w * self.profile.tokens.slide_h]
+            notes = sorted([s for s in pat.slots if s.kind == "text" and s.item_index is None and s.id not in fills
+                            and s.role in (SlotRole.label, SlotRole.caption) and any(b.contains(s.box, tol=12700) for b in plates)],
+                           key=lambda s: -s.box.w)
+            if notes:
+                fills[notes[0].id] = ([once(lead)], None)
+
         # apply text (fitted at the end)
         deleted: set[str] = set()
         placed: list[tuple[Slot, object, list[str], list[int] | None]] = []
@@ -494,6 +510,7 @@ class DeckBuilder:
                 sh = shape_by_id(slide, cid)
                 if sh is not None:
                     delete_shape(sh)
+        self._drop_empty_plates(slide, [s.box for s in pat.slots if s.id in deleted and s.kind == "text"])
         # a speaker frame that now carries a lead line loses the avatar next to it
         if lead_slot is not None and lead_slot.role == SlotRole.person:
             for cid in pat.containers.get(lead_slot.id, []):
@@ -649,6 +666,26 @@ class DeckBuilder:
         if role == SlotRole.label:
             return ([it.value], None) if it.value else ([], None)
         return ([it.text or it.title], None)
+
+    def _drop_empty_plates(self, slide, removed: list[Box]) -> None:
+        """A plate of the example that framed only texts removed now (a note band, a callout)
+        would stay as an empty coloured area: it goes too. Plates still carrying anything stay."""
+        if not removed:
+            return
+        t = self.profile.tokens
+        area, tol = t.slide_w * t.slide_h, int(0.004 * t.slide_w)
+        recs = [r for r in flatten_shapes(slide.shapes) if r.shape.shape_type != MSO_SHAPE_TYPE.GROUP]
+        for r in recs:
+            sh, b = r.shape, r.box
+            if etree.QName(sh._element).localname != "sp" or not is_plate(sh) or not 0.03 * area < b.area < 0.85 * area:
+                continue
+            if sh.has_text_frame and sh.text_frame.text.strip():
+                continue
+            if not any(b.contains(x, tol=tol) for x in removed):
+                continue
+            if any(o is not r and b.contains(o.box, tol=tol) and o.box.area < b.area and draws(o.shape) for o in recs):
+                continue
+            delete_shape(sh)
 
     def _brand_zones(self, slide) -> list[Box]:
         """Logo / footer / page-number zones the slide's layout and master draw."""

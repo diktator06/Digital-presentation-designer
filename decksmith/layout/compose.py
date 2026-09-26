@@ -476,7 +476,10 @@ def draw_process(slide, box: Box, items: list[Item], st: Style, numbered: bool =
 
 
 def draw_cards(slide, box: Box, items: list[Item], st: Style, icons: list[str | None] | None = None):
-    items = items[:8]
+    # a short point without a heading is the card's heading itself (small text alone in a tall card
+    # reads as an empty card)
+    items = [it.model_copy(update={"title": it.text, "text": ""}) if not it.title and it.text and len(it.text) <= 70 else it
+             for it in items[:8]]
     cells = _grid(box, len(items))
     row = len(items) <= 4
     # cards stay compact (not stretched to the full region) unless their text needs the room

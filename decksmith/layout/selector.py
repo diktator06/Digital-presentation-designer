@@ -169,6 +169,11 @@ def score_pattern(p: Pattern, spec: SlideSpec, variant: Variant, used: dict[str,
         if share > 0.3:
             s -= 1.5 * share
             why.append(f"item slots left empty {share:.0%}")
+        # cards with a heading and a body (two frames or one two-style frame), for items that bring
+        # only one line (a title, or a text that then goes into the heading): every body stays empty
+        if (comp or SlotRole.item_title in roles and SlotRole.item_text in roles) and not (has_titles and has_texts):
+            s -= 2.0
+            why.append("card bodies left empty")
     # a title longer than the example's: the part of the title frame that stays clear (before
     # background art, above a subtitle that starts inside it) may hold it only in smaller type
     # than on the other slides of the deck
