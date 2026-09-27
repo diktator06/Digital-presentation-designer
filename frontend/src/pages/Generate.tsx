@@ -52,7 +52,9 @@ export default function Generate() {
     const load = () =>
       api.templates().then((t) => {
         setTemplates(t)
-        if (t.length) setTpl((cur) => cur || (t.find((x) => x.name.includes('tech'))?.id ?? t[0].id))
+        // выбранный шаблон мог быть удалён на вкладке «Шаблоны»: тогда берётся доступный
+        const pick = t.find((x) => x.name.includes('tech'))?.id ?? t[0]?.id ?? ''
+        setTpl((cur) => (cur && t.some((x) => x.id === cur) ? cur : pick))
       })
     load()
     const iv = setInterval(() => templates.length === 0 && load(), 4000)
@@ -78,7 +80,8 @@ export default function Generate() {
       .then((r) => {
         setRun(r)
         setRunId(id)
-        if (r.request?.template_id) setTpl(r.request.template_id)
+        // шаблон прошлого запуска выбирается снова, только если он ещё не удалён
+        if (r.request?.template_id) api.template(r.request.template_id).then(() => setTpl(r.request.template_id)).catch(() => {})
       })
       .catch(() => {})
   }, [])

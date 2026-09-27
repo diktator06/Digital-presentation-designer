@@ -13,10 +13,12 @@ export default function VariantViewer({ run, variant, initialSlide, onBack, onUp
   const [onlySlide, setOnlySlide] = useState(true)
   const [showInfo, setShowInfo] = useState(false)
   const [fixing, setFixing] = useState(false)
+  const [fixError, setFixError] = useState('')
 
   useEffect(() => {
     // размер слайда шаблона нужен, чтобы перевести рамки замечаний (EMU) в проценты картинки
-    api.template(run.request.template_id).then((t) => setDims({ w: t.tokens.slide_w, h: t.tokens.slide_h }))
+    // если шаблон запуска удалён, остаётся размер 16:9 по умолчанию
+    api.template(run.request.template_id).then((t) => setDims({ w: t.tokens.slide_w, h: t.tokens.slide_h })).catch(() => {})
   }, [run.request.template_id])
 
   const issues = useMemo(() => variant.audit?.issues ?? [], [variant.audit])
@@ -53,10 +55,13 @@ export default function VariantViewer({ run, variant, initialSlide, onBack, onUp
   const doFix = async () => {
     // сервер применяет выбранные исправления, заново проводит аудит и возвращает новую версию
     setFixing(true)
+    setFixError('')
     try {
       const nv = await api.fix(run.id, variant.name, [...selected])
       onUpdate(nv)
       setSelected(new Set())
+    } catch (e) {
+      setFixError(e instanceof Error ? e.message : String(e))
     } finally {
       setFixing(false)
     }
@@ -135,6 +140,7 @@ export default function VariantViewer({ run, variant, initialSlide, onBack, onUp
                 {fixing ? <span className="spin" /> : null} Исправить ({selected.size})
               </button>
             </div>
+            {fixError && <div className="badge err" style={{ whiteSpace: 'normal' }}>{fixError}</div>}
           </div>
           {visible.length === 0 && (
             <div className="empty">

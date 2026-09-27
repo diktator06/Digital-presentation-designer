@@ -95,8 +95,17 @@ export type Run = {
 }
 
 async function j<T>(r: Response): Promise<T> {
-  // ответ сервера -> JSON; при ошибке HTTP — исключение с текстом ответа
-  if (!r.ok) throw new Error((await r.text()) || r.statusText)
+  // ответ сервера -> JSON; при ошибке HTTP — исключение с понятным текстом (поле detail FastAPI)
+  if (!r.ok) {
+    const text = await r.text()
+    let msg = text || r.statusText
+    try {
+      msg = JSON.parse(text).detail ?? msg
+    } catch {
+      /* ответ не JSON: остаётся текст как есть */
+    }
+    throw new Error(msg)
+  }
   return r.json() as Promise<T>
 }
 
@@ -110,6 +119,8 @@ export const api = {
     fd.append('file', f)
     return fetch('/api/templates', { method: 'POST', body: fd }).then(j<TemplateCard>)
   },
+  deleteTemplate: (id: string) =>
+    fetch(`/api/templates/${id}`, { method: 'DELETE' }).then(j<{ deleted: string; name: string; uploads_removed: number }>),
   content: () => fetch('/api/content').then(j<ContentPack[]>),
   uploadContent: (files: File[]) => {
     // контент-пакет: несколько файлов одним запросом

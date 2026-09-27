@@ -10,6 +10,8 @@ export default function Templates() {
   const [uploading, setUploading] = useState(false)
   const [loading, setLoading] = useState(true)
   const [opening, setOpening] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState<string | null>(null)
+  const [error, setError] = useState('')
   const ref = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -35,6 +37,26 @@ export default function Templates() {
     }
   }
 
+  const remove = async (id: string, name: string) => {
+    // удаление с подтверждением: шаблон убирается из списка и с сервера (разбор, превью, загруженный файл)
+    const ok = window.confirm(
+      `Удалить шаблон «${name}»?\n\nОн пропадёт из списка и будет удалён с сервера вместе с разбором и ` +
+        'загруженным файлом — и после перезагрузки не вернётся. Уже созданные презентации останутся.',
+    )
+    if (!ok) return
+    setDeleting(id)
+    setError('')
+    try {
+      await api.deleteTemplate(id)
+      setList((l) => l.filter((x) => x.id !== id))
+      setSel((cur) => (cur && cur.id === id ? null : cur))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setDeleting(null)
+    }
+  }
+
   if (sel) {
     const s = sel.summary
     const kinds = Object.keys(s.patterns)
@@ -45,6 +67,11 @@ export default function Templates() {
           <button className="btn" onClick={() => setSel(null)}>← Все шаблоны</button>
           <h2>{sel.name}</h2>
           <span className="muted small">{s.slide_size_in[0]}″×{s.slide_size_in[1]}″ · {s.n_layouts} макетов · {s.n_patterns} паттернов</span>
+          <div className="spacer" />
+          {error && <span className="badge err">{error}</span>}
+          <button className="btn sm danger" disabled={deleting === sel.id} onClick={() => remove(sel.id, sel.name)}>
+            {deleting === sel.id ? <span className="spin" /> : null} Удалить шаблон
+          </button>
         </div>
         <div className="tokens">
           <div className="panel pad col">
@@ -119,6 +146,8 @@ export default function Templates() {
       <div className="row">
         <h2>Шаблоны</h2>
         <span className="muted">шаблон читается как набор правил: токены, типографика, сетка и композиционные паттерны</span>
+        <div className="spacer" />
+        {error && <span className="badge err">{error}</span>}
       </div>
       <div className="tpl-grid">
         <div className="drop panel" onClick={() => ref.current?.click()} style={{ display: 'grid', placeItems: 'center', minHeight: 220 }}>
@@ -139,9 +168,21 @@ export default function Templates() {
             {t.thumbnail && <img src={t.thumbnail} alt="" />}
             <div className="pad col" style={{ gap: 6 }}>
               <div className="row">
-                <h3>{t.name}</h3>
+                <h3 className="tpl-name" title={t.name}>{t.name}</h3>
                 <div className="spacer" />
                 {opening === t.id ? <span className="small"><span className="spin" /> открываем…</span> : <span className="badge blue">{t.n_patterns} паттернов</span>}
+                <button
+                  className="btn sm danger"
+                  title="Удалить шаблон с сайта и с сервера"
+                  disabled={deleting === t.id}
+                  onClick={(e) => {
+                    // кнопка на карточке не должна открывать сам шаблон
+                    e.stopPropagation()
+                    remove(t.id, t.name)
+                  }}
+                >
+                  {deleting === t.id ? <span className="spin" /> : 'Удалить'}
+                </button>
               </div>
               <div className="row" style={{ gap: 4 }}>{t.palette.slice(0, 10).map((c) => <div key={c} className="swatch" style={{ background: `#${c}`, width: 16, height: 16 }} />)}</div>
               <span className="small muted">{t.fonts.heading} / {t.fonts.body} · {t.dark ? 'тёмный' : 'светлый'} · {t.slide_size_in[0]}″×{t.slide_size_in[1]}″</span>

@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import shutil
 import time
 import uuid
@@ -30,7 +31,7 @@ from decksmith.generation.llm import LLMClient
 from decksmith.generation.planner import Brief
 from decksmith.generation.skills import list_versions
 from decksmith.parsing.debug import overlay
-from decksmith.parsing.template_parser import PARSER_VERSION, analyze_template, summarize
+from decksmith.parsing.template_parser import PARSER_VERSION, analyze_template, file_sha256, summarize
 from decksmith.pipeline import Pipeline, apply_rewrites
 from decksmith.render.soffice import pdf_to_pngs, pptx_to_pdf
 from decksmith.export.exporters import to_html
@@ -46,14 +47,33 @@ CORPORA: dict[str, ContentCorpus] = {}
 RUNS: dict[str, dict] = {}
 QUEUES: dict[str, list[asyncio.Queue]] = {}
 PENDING: dict[str, dict] = {}
+# id шаблонов, удалённых пользователем: их не возвращает ни кэш разбора, ни разбор датасета при старте
+DELETED_FILE = WS / "templates" / "deleted.json"
+
+
+def _deleted() -> set[str]:
+    """Id шаблонов, удалённых пользователем."""
+    try:
+        return set(json.loads(DELETED_FILE.read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        return set()
+
+
+def _save_deleted(ids: set[str]) -> None:
+    """Сохраняет список удалённых шаблонов (переживает перезапуск сервиса)."""
+    DELETED_FILE.parent.mkdir(parents=True, exist_ok=True)
+    DELETED_FILE.write_text(json.dumps(sorted(ids)), encoding="utf-8")
 
 
 # ----------------------------------------------------------------------------- запуск
 def _load_existing() -> None:
+    """Поднимает сохранённые шаблоны, контент-пакеты и запуски из рабочего каталога."""
+    deleted = _deleted()
     for p in (WS / "templates").glob("*/profile.json"):
         try:
             prof = TemplateProfile.model_validate_json(p.read_text(encoding="utf-8"))
-            if prof.parser_version == PARSER_VERSION:  # устаревшие профили разбираются заново по запросу
+            # устаревшие профили разбираются заново по запросу; удалённые пользователем не возвращаются
+            if prof.parser_version == PARSER_VERSION and prof.id not in deleted:
                 TEMPLATES[prof.id] = prof
         except Exception:
             continue
@@ -75,10 +95,16 @@ async def startup() -> None:
     _load_existing()
 
     async def warm():
-        # шаблоны датасета разбираются в фоне при старте (работа до Enter)
+        # шаблоны датасета разбираются в фоне при старте (работа до Enter), кроме удалённых пользователем
         for t in sorted((ROOT / "data" / "templates").glob("*.pptx")):
             try:
+                if file_sha256(t)[:12] in _deleted():
+                    continue
                 prof = await asyncio.to_thread(analyze_template, t, name=t.stem)
+                if prof.id in _deleted():
+                    # шаблон удалили, пока он разбирался: кэш разбора тоже убирается
+                    shutil.rmtree(WS / "templates" / prof.id, ignore_errors=True)
+                    continue
                 TEMPLATES[prof.id] = prof
             except Exception as e:
                 log.warning("warmup failed for %s: %s", t, e)
@@ -119,8 +145,34 @@ async def upload_template(file: UploadFile = File(...)):
         shutil.copyfileobj(file.file, f)
     t0 = time.time()
     prof = await asyncio.to_thread(analyze_template, tmp, name=Path(file.filename).stem)
+    deleted = _deleted()
+    if prof.id in deleted:
+        # тот же файл загружен заново после удаления: пользователь возвращает шаблон явно
+        _save_deleted(deleted - {prof.id})
     TEMPLATES[prof.id] = prof
     return {**_template_card(prof), "analysis_s": round(time.time() - t0, 1)}
+
+
+@app.delete("/api/templates/{tid}")
+def delete_template(tid: str):
+    """Удаляет шаблон полностью: из списка, кэш разбора (профиль, рендеры, копия файла) и загруженный через
+    сайт файл. Шаблон из папки датасета больше не разбирается при старте. Готовые презентации остаются.
+    """
+    if not re.fullmatch(r"[0-9a-f]{12}", tid) or tid not in TEMPLATES:
+        raise HTTPException(404, "Шаблон не найден")
+    if any(r.get("status") == "running" and r.get("request", {}).get("template_id") == tid for r in RUNS.values()):
+        raise HTTPException(409, "Шаблон используется в идущей генерации: удалите его после её завершения")
+    prof = TEMPLATES.pop(tid)
+    # сначала отметка об удалении: даже если удаление файлов прервётся, шаблон не вернётся после перезапуска
+    _save_deleted(_deleted() | {tid})
+    shutil.rmtree(WS / "templates" / tid, ignore_errors=True)
+    removed = 0
+    for f in (WS / "uploads").glob("*"):
+        if f.is_file() and file_sha256(f)[:12] == tid:
+            f.unlink(missing_ok=True)
+            removed += 1
+    log.info("template %s (%s) deleted, uploads removed: %d", tid, prof.name, removed)
+    return {"deleted": tid, "name": prof.name, "uploads_removed": removed}
 
 
 @app.get("/api/templates/{tid}")
@@ -269,7 +321,7 @@ async def _run_job(run_id: str, req: RunRequest) -> None:
 async def start_run(req: RunRequest, bg: BackgroundTasks):
     """Старт запуска по брифу (нажатие Enter): возвращает id, прогресс идёт через SSE."""
     if req.template_id not in TEMPLATES:
-        raise HTTPException(404, "template not found")
+        raise HTTPException(404, "Шаблон не найден: возможно, он удалён")
     run_id = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
     RUNS[run_id] = {"id": run_id, "status": "running", "started": time.time(), "request": req.model_dump(),
                     "template": TEMPLATES[req.template_id].name, "events": []}
@@ -336,7 +388,9 @@ async def fix_variant(run_id: str, name: str, req: FixRequest):
     v = next((x for x in r["variants"] if x["name"] == name), None)
     if not v or not v.get("audit"):
         raise HTTPException(404)
-    prof = TEMPLATES[r["request"]["template_id"]]
+    prof = TEMPLATES.get(r["request"]["template_id"])
+    if prof is None:
+        raise HTTPException(409, "Шаблон этого запуска удалён: исправления недоступны, файлы презентаций остаются")
     audit = AuditReport.model_validate(v["audit"])
     chosen = [i for i in audit.issues if i.id in set(req.issue_ids)]
     vdir = Path(v["pptx_path"]).parent
