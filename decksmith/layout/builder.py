@@ -301,9 +301,11 @@ class DeckBuilder:
         if rep.direction == "row":
             span0, span1 = boxes[0].x, boxes[n - 1].r
             w = boxes[0].w
-            gap = (span1 - span0 - keep * w) / max(keep - 1, 1) if keep > 1 else 0
+            # оставшиеся карточки сохраняют промежуток примера и встают по центру ряда (а не расходятся к краям)
+            gap = max(boxes[1].x - boxes[0].r, 0) if n > 1 else 0
+            start = span0 + (span1 - span0 - (keep * w + (keep - 1) * gap)) / 2
             for i in range(keep):
-                nx = span0 + i * (w + gap) if keep > 1 else span0 + (span1 - span0 - w) / 2
+                nx = start + i * (w + gap)
                 for s in shapes[i]:
                     move_shape(s, int(nx - boxes[i].x), 0)
         else:

@@ -751,6 +751,12 @@ def content_lost(ctx):
             frags.append(spec.message or spec.subtitle)  # вводная фраза разделителя, призыв к действию в питче
         words = _slide_words(sf)
         missing = [f for f in frags if f and not _present(f, words)]
+        lead = [t for t in (spec.subtitle, spec.message) if t]
+        if spec.intent.value in ("text", "image_text", "two_column") and not frags and lead:
+            # у слайда без пунктов подзаголовок или фраза — весь его текст: должен быть виден хотя бы один
+            frags.append(lead[0])
+            if not any(_present(t, words) for t in lead):
+                missing.append(lead[0])
         if missing:
             out.append(issue("integrity.content_lost", sf.index, f"Не видно {len(missing)} из {len(frags)} элементов: «{missing[0][:40]}»…",
                              severity=Severity.error if len(missing) > len(frags) / 2 else Severity.warning,

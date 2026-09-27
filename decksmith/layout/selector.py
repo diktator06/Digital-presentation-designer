@@ -11,11 +11,13 @@ from functools import lru_cache
 from pathlib import Path
 
 import yaml
+from PIL import Image
 
 from decksmith.core.config import ROOT
 from decksmith.core.models import Box, DeckPlan, Pattern, PatternKind, SlideLayout, SlideSpec, SlotRole, TemplateProfile
 from decksmith.layout.room import clear_title_box, owned_height
 from decksmith.layout.textfit import fits
+from decksmith.parsing.ooxml import color_distance, rgb_to_hex
 
 K = PatternKind
 
@@ -37,6 +39,8 @@ COMPAT: dict[PatternKind, dict[PatternKind, float]] = {
     K.thanks: {K.thanks: 1.0, K.contacts: 0.7, K.section: 0.35, K.title: 0.4},
 }
 ITEM_KINDS = {K.cards, K.steps, K.stats, K.agenda, K.team}
+# содержательные слайды, у которых подзаголовок или одна фраза могут быть всем текстом слайда
+LEAD_KINDS = {K.text, K.image_text, K.two_column}
 
 
 @dataclass
@@ -80,9 +84,52 @@ def spec_chars(spec: SlideSpec) -> int:
     return n
 
 
+@lru_cache(maxsize=256)
+def _cell_colors(png: str) -> tuple[tuple[str, ...], ...]:
+    """Цвета клеток сетки 64×36 рендера пустого макета."""
+    im = Image.open(png).convert("RGB").resize((64, 36))
+    px = im.load()
+    return tuple(tuple(rgb_to_hex(px[x, y]) for x in range(64)) for y in range(36))
+
+
+def _layout_art(profile: TemplateProfile, p: Pattern) -> float:
+    """Доля области под заголовком, которую макет занимает собственной графикой (панель под объект,
+    орнамент) и которую не закрывает ни один слот паттерна. Фоном считается цвет, на котором стоит текст
+    слотов: у макета «половина белая, половина тёмная» пустой остаётся та половина, где текста нет.
+    """
+    li = p.layout_index
+    if li is None or not 0 <= li < len(profile.layouts):
+        return 0.0
+    lay, t = profile.layouts[li], profile.tokens
+    if not lay.thumbnail or not Path(lay.thumbnail).exists():
+        return 0.0
+    cells = _cell_colors(lay.thumbnail)
+    below = lay.title_box.b if lay.title_box else (t.title_box.b if t.title_box else int(0.2 * t.slide_h))
+    m = t.margins
+    x0, x1 = int(m.left / t.slide_w * 64), int((t.slide_w - m.right) / t.slide_w * 64)
+    y0, y1 = int(below / t.slide_h * 36), int((t.slide_h - m.bottom) / t.slide_h * 36)
+    region = [(x, y) for y in range(y0, y1) for x in range(x0, x1)]
+    if not region:
+        return 0.0
+
+    def slot_at(x: int, y: int, kinds=("text", "picture", "table", "chart")) -> bool:
+        """Клетка внутри рамки какого-либо слота паттерна."""
+        cx, cy = (x + 0.5) / 64 * t.slide_w, (y + 0.5) / 36 * t.slide_h
+        return any(sl.kind in kinds and sl.box.x <= cx <= sl.box.r and sl.box.y <= cy <= sl.box.b for sl in p.slots)
+
+    under_text = [cells[y][x] for y in range(36) for x in range(64) if slot_at(x, y, ("text",))]
+    ref = max(set(under_text), key=under_text.count) if under_text else (lay.background_hex or t.background_hex)
+    if under_text and sum(color_distance(c, ref) > 120 for c in under_text) > 0.3 * len(under_text):
+        return 0.0  # пёстрый фон (фото, текстура) и под текстом: это фон, а не пустая панель
+    art = [(x, y) for x, y in region if not slot_at(x, y) and color_distance(cells[y][x], ref) > 120]
+    return len(art) / len(region)
+
+
 def _removable(p: Pattern) -> bool:
-    """Лишние элементы повторителя можно удалить без дыр (ряд, колонка или сетка)."""
-    return bool(p.repeaters) and p.repeaters[0].direction in ("row", "column", "grid")
+    """Лишние элементы повторителя можно удалить без дыр: ряд или колонка сдвигаются по исходной длине."""
+    # в сетке удалённые элементы оставляют пустой ряд, а подложки рядов и нумерация карточек часто
+    # нарисованы в макете и не удаляются вместе с элементами
+    return bool(p.repeaters) and p.repeaters[0].direction in ("row", "column")
 
 
 @dataclass
@@ -114,7 +161,7 @@ def _title_ratio(title: str, font: str, size: float, bold: bool, w: int, h: int)
 
 def score_pattern(p: Pattern, spec: SlideSpec, variant: Variant, used: dict[str, int], prev: str | None,
                   has_image: bool = False, slide_area: int = 0, layout_photo: float = 0.0,
-                  layout_uses: int = 0, title_clear: Box | None = None) -> Candidate | None:
+                  layout_uses: int = 0, title_clear: Box | None = None, layout_art: float = 0.0) -> Candidate | None:
     compat = COMPAT.get(spec.intent, {spec.intent: 1.0})
     w = compat.get(p.kind)
     if w is None or p.kind == K.guide or p.score_hint < 0.2:
@@ -148,8 +195,12 @@ def score_pattern(p: Pattern, spec: SlideSpec, variant: Variant, used: dict[str,
     elif need > 0 and spec.intent in ITEM_KINDS:
         s -= 0.8  # элементы превратились бы в сплошной текст
     # пункты встают только в рамки основного текста или в элементы повторителя: без них они бы потерялись
-    if spec.bullets and not p.repeaters and not any(
-            sl.kind == "text" and sl.item_index is None and sl.role == SlotRole.body for sl in p.slots):
+    frames = {sl.role for sl in p.slots if sl.kind == "text" and sl.item_index is None}
+    if spec.bullets and not p.repeaters and SlotRole.body not in frames:
+        return None
+    # слайд, текст которого — подзаголовок или одна фраза, тоже теряет его без рамки подзаголовка или текста
+    if (spec.intent in LEAD_KINDS and not spec.bullets and not spec.items and (spec.subtitle or spec.message)
+            and not p.repeaters and not frames & {SlotRole.body, SlotRole.subtitle}):
         return None
     # структура элементов: заголовкам+текстам нужны либо два слота, либо составная рамка
     if p.repeaters and spec.items:
@@ -246,6 +297,12 @@ def score_pattern(p: Pattern, spec: SlideSpec, variant: Variant, used: dict[str,
         if share > 0.01:
             s -= min(3.0, 12.0 * share)
             why.append(f"empty painted frames {share:.0%}")
+    # макет, у которого большую часть места под заголовком занимает собственная графика (панель под объект,
+    # орнамент), без изображения оставляет на содержательном слайде пустую область
+    if (layout_art > 0.45 and p.source == "layout" and spec.intent not in (K.title, K.section, K.thanks, K.quote)
+            and not (has_image and any(sl.kind == "picture" for sl in p.slots))):
+        s -= 1.5
+        why.append(f"layout art {layout_art:.0%} of the content area")
     # фото, вшитые в макет, видны на каждом слайде на его основе, о чём бы он ни был:
     # уместно на обложке или разделителе, не по теме рядом с содержанием и никогда дважды в колоде
     if layout_photo > 0.15 and spec.intent not in (K.title, K.section, K.thanks):
@@ -360,14 +417,18 @@ def select_layouts(plan: DeckPlan, profile: TemplateProfile, variant: Variant,
     out: list[SlideLayout] = []
     avoid = avoid or {}
     images = images or set()
+    art: dict[str, float] = {}  # доля графики макета по паттернам (считается один раз на выбор)
     for spec in plan.slides:
         has_image = spec.id in images
         cands: list[Candidate] = []
         for p in patterns:
             li = p.layout_index if p.layout_index is not None and 0 <= p.layout_index < len(profile.layouts) else None
+            if p.id not in art:
+                art[p.id] = _layout_art(profile, p) if p.source == "layout" else 0.0
             c = score_pattern(p, spec, variant, used, prev, has_image, profile.tokens.slide_w * profile.tokens.slide_h,
                               profile.layouts[li].photo_share if li is not None else 0.0, photo_uses,
-                              profile.layouts[li].title_clear if li is not None else None)
+                              profile.layouts[li].title_clear if li is not None else None,
+                              art[p.id])
             if c:
                 cands.append(c)
         comp = compose_candidates(spec, variant, has_image)
