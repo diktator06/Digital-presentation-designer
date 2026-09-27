@@ -174,14 +174,26 @@ def complete_plan(plan: DeckPlan, n: int) -> None:
         s.id = f"s{i + 1}"
 
 
+# служебные метки, которыми модель иногда начинает фразу («Призыв: …», «Вывод: …»), ru + en
+_LABEL = re.compile(r"^\s*(призыв(\s+к\s+действию)?|вывод|итог|сообщение|подзаголовок|лид|"
+                    r"call\s+to\s+action|cta|takeaway|message|subtitle)\s*[:—–-]\s*", re.I)
+
+
+def _strip_label(text: str) -> str:
+    """Фраза без служебной метки в начале; метка без текста после неё не трогается."""
+    rest = _LABEL.sub("", text or "", count=1)
+    return rest[:1].upper() + rest[1:] if rest.strip() and rest != text else text
+
+
 def _to_spec(i: int, o: OutlineSlide, w: WrittenSlide | None) -> SlideSpec:
     intent = PatternKind(o.intent)
-    spec = SlideSpec(id=f"s{i + 1}", intent=intent, title=(w.title if w and w.title else o.title), message=o.message)
+    spec = SlideSpec(id=f"s{i + 1}", intent=intent, title=(w.title if w and w.title else o.title),
+                     message=_strip_label(o.message))
     if o.message.strip().lower() == "summary":
         spec.message = ""
         spec.notes = "summary"
     if w:
-        spec.subtitle = w.subtitle
+        spec.subtitle = _strip_label(w.subtitle)
         spec.bullets = [b for b in w.bullets if b.strip()][:6]
         spec.items = [it for it in w.items if (it.title or it.text or it.value)][:8]
         if w.chart and w.chart.series and w.chart.categories:

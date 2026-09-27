@@ -18,6 +18,7 @@ from decksmith.core.models import Box, DeckPlan, Pattern, PatternKind, SlideLayo
 from decksmith.layout.room import clear_title_box, owned_height
 from decksmith.layout.textfit import fits
 from decksmith.parsing.ooxml import color_distance, rgb_to_hex
+from decksmith.parsing.template_parser import occupancy_grid
 
 K = PatternKind
 
@@ -125,6 +126,30 @@ def _layout_art(profile: TemplateProfile, p: Pattern) -> float:
     return len(art) / len(region)
 
 
+def _layout_under_items(profile: TemplateProfile, p: Pattern) -> bool:
+    """Макет сам рисует что-то под элементами повторителя (плитки, номера, иконки): спрятанный элемент
+    оставил бы от себя пустую плитку макета.
+    """
+    li = p.layout_index
+    if li is None or not 0 <= li < len(profile.layouts):
+        return False
+    lay, t = profile.layouts[li], profile.tokens
+    if not lay.thumbnail or not Path(lay.thumbnail).exists():
+        return False
+    edges = _edge_cells(lay.thumbnail, lay.background_hex or t.background_hex)
+    inside = [edges[y][x] for y in range(36) for x in range(64)
+              if any(b.x <= (x + 0.5) / 64 * t.slide_w <= b.r and b.y <= (y + 0.5) / 36 * t.slide_h <= b.b
+                     for b in p.repeaters[0].item_boxes)]
+    # у плиток, номеров и иконок есть контуры, у градиентов и свечений фона — нет
+    return bool(inside) and sum(inside) > 0.05 * len(inside)
+
+
+@lru_cache(maxsize=256)
+def _edge_cells(png: str, bg_hex: str) -> tuple[tuple[bool, ...], ...]:
+    """Клетки 64×36 рендера пустого макета, в которых есть контуры нарисованного."""
+    return tuple(tuple(row) for row in occupancy_grid(Path(png), bg_hex, 64, 36, edges_only=True))
+
+
 def _removable(p: Pattern) -> bool:
     """Лишние элементы повторителя можно удалить без дыр: ряд или колонка сдвигаются по исходной длине."""
     # в сетке удалённые элементы оставляют пустой ряд, а подложки рядов и нумерация карточек часто
@@ -161,7 +186,8 @@ def _title_ratio(title: str, font: str, size: float, bold: bool, w: int, h: int)
 
 def score_pattern(p: Pattern, spec: SlideSpec, variant: Variant, used: dict[str, int], prev: str | None,
                   has_image: bool = False, slide_area: int = 0, layout_photo: float = 0.0,
-                  layout_uses: int = 0, title_clear: Box | None = None, layout_art: float = 0.0) -> Candidate | None:
+                  layout_uses: int = 0, title_clear: Box | None = None, layout_art: float = 0.0,
+                  hide_ok: bool = True) -> Candidate | None:
     compat = COMPAT.get(spec.intent, {spec.intent: 1.0})
     w = compat.get(p.kind)
     if w is None or p.kind == K.guide or p.score_hint < 0.2:
@@ -180,7 +206,7 @@ def score_pattern(p: Pattern, spec: SlideSpec, variant: Variant, used: dict[str,
         if p.n_items == need:
             s += 1.2
             why.append(f"items {need}=={p.n_items}")
-        elif p.n_items > need and _removable(p) and p.n_items - need <= 2 and need >= 2 and p.source == "slide":
+        elif p.n_items > need and _removable(p) and hide_ok and p.n_items - need <= 2 and need >= 2 and p.source == "slide":
             # (паттерны из одних макетов не могут прятать элементы: рендереры всё равно рисуют пустые рамки
             # макета)
             s += 0.2
@@ -418,6 +444,7 @@ def select_layouts(plan: DeckPlan, profile: TemplateProfile, variant: Variant,
     avoid = avoid or {}
     images = images or set()
     art: dict[str, float] = {}  # доля графики макета по паттернам (считается один раз на выбор)
+    hide: dict[str, bool] = {}  # можно ли прятать лишние элементы повторителя
     for spec in plan.slides:
         has_image = spec.id in images
         cands: list[Candidate] = []
@@ -425,10 +452,11 @@ def select_layouts(plan: DeckPlan, profile: TemplateProfile, variant: Variant,
             li = p.layout_index if p.layout_index is not None and 0 <= p.layout_index < len(profile.layouts) else None
             if p.id not in art:
                 art[p.id] = _layout_art(profile, p) if p.source == "layout" else 0.0
+                hide[p.id] = not (p.repeaters and _layout_under_items(profile, p))
             c = score_pattern(p, spec, variant, used, prev, has_image, profile.tokens.slide_w * profile.tokens.slide_h,
                               profile.layouts[li].photo_share if li is not None else 0.0, photo_uses,
                               profile.layouts[li].title_clear if li is not None else None,
-                              art[p.id])
+                              art[p.id], hide[p.id])
             if c:
                 cands.append(c)
         comp = compose_candidates(spec, variant, has_image)
