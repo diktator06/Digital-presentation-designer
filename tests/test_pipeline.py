@@ -1,6 +1,6 @@
-"""Business scenario end-to-end (offline planner): unknown template + content pack -> 3 decks in time.
+"""Бизнес-сценарий от начала до конца (офлайн-планировщик): незнакомый шаблон + контент-пакет -> 3 колоды в срок.
 
-Runs on a clean clone: synthetic template + the repository's own sample content pack.
+Работает на чистом клоне: синтетический шаблон + собственный пример контент-пакета репозитория.
 """
 import asyncio
 import json
@@ -20,8 +20,8 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_end_to_end_three_variants_under_five_minutes(tmp_path):
     pipe = Pipeline()
     template = brand_footer(tmp_path / "unknown_brand.pptx")
-    profile = pipe.prepare_template(template)  # pre-Enter
-    corpus = pipe.prepare_content(sorted((ROOT / "data" / "content").glob("*.md")))  # pre-Enter
+    profile = pipe.prepare_template(template)  # до Enter
+    corpus = pipe.prepare_content(sorted((ROOT / "data" / "content").glob("*.md")))  # до Enter
     brief = Brief(text="Сервис генерации презентаций в фирменном шаблоне по брифу", purpose="product", n_slides=12)
     t0 = time.time()
     res = asyncio.run(pipe.run(profile, corpus, brief))

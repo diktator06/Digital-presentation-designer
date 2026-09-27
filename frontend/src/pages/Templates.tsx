@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { api, KIND_RU, type TemplateCard, type TemplateDetail } from '../api'
 
 export default function Templates() {
+  // вкладка шаблонов: список, загрузка нового и декомпозиция слайдов-примеров
   const [list, setList] = useState<TemplateCard[]>([])
   const [sel, setSel] = useState<TemplateDetail | null>(null)
   const [overlay, setOverlay] = useState(true)
@@ -16,11 +17,13 @@ export default function Templates() {
   }, [])
 
   const openTemplate = (id: string) => {
+    // полный профиль шаблона: токены, паттерны и их слоты
     setOpening(id)
     api.template(id).then(setSel).finally(() => setOpening(null))
   }
 
   const upload = async (f: File | undefined) => {
+    // новый шаблон разбирается на сервере сразу и открывается
     if (!f) return
     setUploading(true)
     try {

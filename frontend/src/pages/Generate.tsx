@@ -22,12 +22,14 @@ const VARIANTS = ['balanced', 'visual', 'dense']
 const VARIANT_RU: Record<string, string> = { balanced: 'Сбалансированный', visual: 'Визуальный', dense: 'Аналитический' }
 
 function fmt(s: number) {
+  // секунды -> «м:сс» для таймера генерации
   const m = Math.floor(s / 60)
   const r = Math.floor(s % 60)
   return `${m}:${r.toString().padStart(2, '0')}`
 }
 
 export default function Generate() {
+  // экран генерации: выбор шаблона и контента, бриф, прогресс трёх вариантов и их превью
   const [templates, setTemplates] = useState<TemplateCard[]>([])
   const [packs, setPacks] = useState<ContentPack[]>([])
   const [tpl, setTpl] = useState<string>('')
@@ -46,6 +48,7 @@ export default function Generate() {
   const fileRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
+    // шаблоны датасета разбираются в фоне при старте сервера: опрашиваем список, пока он пуст
     const load = () =>
       api.templates().then((t) => {
         setTemplates(t)
@@ -62,12 +65,12 @@ export default function Generate() {
   }, [templates.length])
 
   useEffect(() => {
-    // the service keeps runs: after a reload the last one is shown again (progress replayed)
+    // сервис хранит запуски: после перезагрузки страницы последний показывается снова (прогресс воспроизводится)
     let id: string | null = null
     try {
       id = localStorage.getItem(LAST_RUN)
     } catch {
-      /* storage unavailable (private mode): start clean */
+      /* хранилище недоступно (приватный режим): начинаем с чистого листа */
     }
     if (!id) return
     api
@@ -81,6 +84,7 @@ export default function Generate() {
   }, [])
 
   useEffect(() => {
+    // события прогресса запуска приходят по SSE; по завершении загружаем итог
     if (!runId) return
     setEvents([])
     const es = new EventSource(`/api/runs/${runId}/events`)
@@ -96,18 +100,20 @@ export default function Generate() {
   }, [runId])
 
   useEffect(() => {
+    // таймер от нажатия Enter тикает, пока идёт генерация
     if (!run || run.status !== 'running') return
     const iv = setInterval(() => setNow(Date.now()), 250)
     return () => clearInterval(iv)
   }, [run])
 
   const start = async () => {
+    // старт генерации по Enter: запоминаем id запуска, чтобы восстановить его после перезагрузки
     if (!tpl || !brief.trim()) return
     const { run_id } = await api.startRun({ template_id: tpl, content_id: pack || null, brief, purpose, n_slides: nSlides })
     try {
       localStorage.setItem(LAST_RUN, run_id)
     } catch {
-      /* storage unavailable: nothing to restore later */
+      /* хранилище недоступно: восстанавливать будет нечего */
     }
     setRun({ id: run_id, status: 'running', started: Date.now() / 1000, template: '', events: [], request: { template_id: tpl, brief, purpose, n_slides: nSlides } })
     setNow(Date.now())
@@ -116,6 +122,7 @@ export default function Generate() {
   }
 
   const onKey = (e: React.KeyboardEvent) => {
+    // Enter запускает генерацию, Shift+Enter — перенос строки в брифе
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       start()
@@ -123,6 +130,7 @@ export default function Generate() {
   }
 
   const uploadPack = async (files: FileList | null) => {
+    // загрузка своего контент-пакета (PDF/DOCX/PPTX/MD/TXT/CSV/XLSX)
     if (!files?.length) return
     setBusy('content')
     const p = await api.uploadContent([...files])
@@ -131,6 +139,7 @@ export default function Generate() {
     setBusy('')
   }
   const samplePack = async () => {
+    // готовый демо-контент из data/content/
     setBusy('content')
     const p = await api.sampleContent()
     setPacks((x) => [p, ...x.filter((y) => y.id !== p.id)])
@@ -141,6 +150,7 @@ export default function Generate() {
   const elapsed = run ? (run.status === 'running' ? (now / 1000 - run.started) : run.elapsed_s ?? 0) : 0
   const planEv = events.find((e) => e.stage === 'plan' && e.status === 'done')
   const stageState = useMemo(() => {
+    // последнее завершённое событие каждого этапа каждого варианта (для таблицы прогресса)
     const m: Record<string, RunEvent> = {}
     events.forEach((e) => {
       if (e.variant && e.status === 'done') m[`${e.variant}:${e.stage}`] = e
@@ -149,6 +159,7 @@ export default function Generate() {
   }, [events])
 
   const replaceVariant = (nv: Variant) => {
+    // после исправлений в просмотрщике подменяем вариант новой версией
     setRun((r) => (r ? { ...r, variants: r.variants?.map((v) => (v.name === nv.name ? nv : v)) } : r))
     setOpen((o) => (o ? { ...o, v: nv } : o))
   }
@@ -298,6 +309,7 @@ export default function Generate() {
 }
 
 function Stage({ label, cells, started }: { label: string; cells: (RunEvent | undefined)[]; started: boolean }) {
+  // строка таблицы прогресса: этап и его состояние в каждом из трёх вариантов
   return (
     <>
       <span className="small muted">{label}</span>

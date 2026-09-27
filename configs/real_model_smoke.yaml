@@ -1,6 +1,6 @@
-# Cheap check that the model path works end to end: one variant, 8 slides, same brief and
-# content as real_model_e2e.yaml. On VseGPT it costs about 6 ₽, most of it the visual audit
-# on the VLM (qwen3.8-27b is ~8x the price of qwen3-32b); the full 3-variant run is ~20-25 ₽.
+# Дешёвая сквозная проверка пути через модель: один вариант, 8 слайдов, тот же бриф и
+# контент, что в real_model_e2e.yaml. На VseGPT стоит около 6 ₽, в основном визуальный аудит
+# на VLM (qwen3.8-27b примерно в 8 раз дороже qwen3-32b); полный запуск на 3 варианта — ~20–25 ₽.
 #   decksmith run configs/real_model_smoke.yaml
 templates:
   - data/templates/vk_education.pptx

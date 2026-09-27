@@ -1,11 +1,11 @@
-"""End-to-end orchestration.
+"""Сквозная оркестрация.
 
-  pre-Enter (cached, no time limit):   analyze_template, ingest_content
-  after Enter (<= 5 min for 3 decks):  plan -> images/icons -> 3 variants in parallel:
-        select -> build -> shorten -> render -> audit -> autofix -> re-audit -> export
+  до Enter (с кэшем, без лимита времени):   analyze_template, ingest_content
+  после Enter (≤ 5 мин на 3 колоды):        план -> изображения/иконки -> 3 варианта параллельно:
+        выбор -> сборка -> сокращение -> рендер -> аудит -> автоисправление -> повторный аудит -> экспорт
 
-Every run writes workspace/runs/<run_id>/manifest.json with timings, skill
-versions (+sha), model telemetry and per-slide layout rationale.
+Каждый запуск пишет workspace/runs/<run_id>/manifest.json с замерами времени, версиями
+скиллов (+sha), телеметрией модели и обоснованием вёрстки каждого слайда.
 """
 from __future__ import annotations
 
@@ -68,6 +68,7 @@ class RunResult:
 
 
 async def _emit(cb: Emit | None, **ev) -> None:
+    """Отправляет событие прогресса в колбэк (синхронный или асинхронный)."""
     if cb is None:
         return
     r = cb(ev)
@@ -76,11 +77,12 @@ async def _emit(cb: Emit | None, **ev) -> None:
 
 
 # ----------------------------------------------------------------------------
-# Variant-level plan transforms (deterministic)
+# Преобразования плана на уровне варианта (детерминированные)
 # ----------------------------------------------------------------------------
 def _bullet_item(b: str) -> Item:
-    """'Head: details' becomes a titled card; a head too long for a card title is not cut
-    mid-word, the whole bullet stays the card text."""
+    """«Заголовок: подробности» становится карточкой с заголовком; слишком длинный для карточки заголовок не
+    обрезается посреди слова — весь пункт остаётся текстом карточки.
+    """
     head, sep, rest = b.partition(":")
     if sep and rest.strip() and len(head.strip()) <= 40:
         return Item(title=head.strip(), text=rest.strip(), icon=b)
@@ -92,8 +94,9 @@ _CONTENT = {PatternKind.text, PatternKind.cards, PatternKind.steps, PatternKind.
 
 
 def _section_digest(sec: SlideSpec, rest: list[SlideSpec]) -> SlideSpec:
-    """A divider of the analytic variant becomes the summary of its section: its lead line and the
-    conclusions (titles) of its slides. A divider with nothing to summarise stays a divider."""
+    """Разделитель аналитического варианта становится итогом своего раздела: его вводная фраза и выводы
+    (заголовки) его слайдов. Разделитель, которому нечего подытожить, остаётся разделителем.
+    """
     body = []
     for s in rest:
         if s.intent in (PatternKind.section, PatternKind.thanks, PatternKind.contacts):
@@ -116,7 +119,7 @@ def apply_variant(plan: DeckPlan, v: Variant) -> DeckPlan:
         summ = next((s for s in slides if "[summary]" in (s.notes or "") or s.notes == "summary"), None)
         agenda = next((s for s in slides if s.intent == PatternKind.agenda), None)
         if summ is None and agenda is not None:
-            # no summary slide in the plan: the table of contents becomes the conclusions up front
+            # в плане нет итогового слайда: содержание становится выводами в начале
             concl = conclusions[: v.max_bullets]
             if len(concl) >= 2:
                 agenda.intent, agenda.items, agenda.bullets = PatternKind.text, [], concl
@@ -129,11 +132,12 @@ def apply_variant(plan: DeckPlan, v: Variant) -> DeckPlan:
             slides.insert(pos, summ)
             summary_first = True
     if v.drop_sections and not summary_first:
-        # no dividers in this variant, but the slide count the user asked for stays (TZ): a divider
-        # sums up its section (with the conclusions up front already, it stays a plain divider)
+        # в этом варианте нет разделителей, но заданное пользователем число слайдов сохраняется (ТЗ):
+        # разделитель
+        # подводит итог своего раздела (если выводы уже стоят в начале, он остаётся обычным разделителем)
         slides = [_section_digest(s, slides[i + 1:]) if s.intent == PatternKind.section else s for i, s in enumerate(slides)]
     if v.prefer_icons:
-        for s in slides:  # short bullet lists become icon cards
+        for s in slides:  # короткие списки становятся карточками с иконками
             if s.intent == PatternKind.text and 3 <= len(s.bullets) <= 5 and all(len(b.split()) <= 14 for b in s.bullets) and not s.items:
                 s.items = [_bullet_item(b) for b in s.bullets]
                 s.intent = PatternKind.cards
@@ -145,8 +149,9 @@ def apply_variant(plan: DeckPlan, v: Variant) -> DeckPlan:
 
 def plan_variants(plan: DeckPlan, profile: TemplateProfile, names: list[str],
                   images: dict[str, str] | None = None) -> dict[str, tuple[DeckPlan, list]]:
-    """Variant plans + layout decisions, chosen in sequence so that each variant avoids
-    the patterns earlier variants used for the same slide (visible difference)."""
+    """Планы вариантов + решения по вёрстке выбираются по очереди, чтобы каждый вариант избегал паттернов,
+    которые предыдущие варианты использовали для того же слайда (видимое различие).
+    """
     all_v = load_variants()
     avoid: dict[str, set[str]] = {}
     out = {}
@@ -162,6 +167,7 @@ def plan_variants(plan: DeckPlan, profile: TemplateProfile, names: list[str],
 
 
 def icons_for_plan(plan: DeckPlan, color: str) -> dict[str, list[str | None]]:
+    """Иконки для элементов слайдов плана в цвете шаблона."""
     out = {}
     for s in plan.slides:
         if s.items:
@@ -175,19 +181,24 @@ class Pipeline:
         self.cfg = settings()
         self.agent = agent or load_agent()
         self.telemetry = Telemetry()
-        self.transport = transport  # custom HTTP transport for the model endpoint (tests: in-process emulator)
+        # собственный HTTP-транспорт для endpoint модели (тесты: эмулятор в том же процессе)
+        self.transport = transport
 
-    # ---- pre-Enter -----------------------------------------------------------
+    # ---- до Enter ------------------------------------------------------------
     def prepare_template(self, path: str | Path, name: str | None = None) -> TemplateProfile:
+        """Разбор шаблона (с кэшем)."""
         return analyze_template(path, name=name)
 
     def prepare_content(self, files: list[str | Path], extra_text: str = "") -> ContentCorpus:
+        """Приём контент-пакета."""
         return ingest(files, extra_text)
 
-    # ---- after Enter ---------------------------------------------------------
+    # ---- после Enter ---------------------------------------------------------
     async def run(self, profile: TemplateProfile, corpus: ContentCorpus, brief: Brief, variants: list[str] | None = None,
                   emit: Emit | None = None, run_id: str | None = None, plan: DeckPlan | None = None) -> RunResult:
-        """Brief + content -> variants. A ready `plan` (e.g. an approved outline) skips the planning step."""
+        """Бриф + контент -> варианты. Готовый `plan` (например, утверждённая структура) пропускает шаг
+        планирования.
+        """
         t0 = time.time()
         run_id = run_id or time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
         rdir = self.cfg.workspace / "runs" / run_id
@@ -215,7 +226,7 @@ class Pipeline:
             timings["assets"] = round(time.time() - t1, 2)
             await _emit(emit, stage="assets", status="done", images=len(images), t=round(time.time() - t0, 2))
 
-            chosen = plan_variants(plan, profile, names, images)  # deterministic, milliseconds
+            chosen = plan_variants(plan, profile, names, images)  # детерминированно, миллисекунды
             results = await asyncio.gather(*[
                 self._variant(all_variants[n], chosen[n], profile, corpus, brief, images, icons, rdir, llm, emit, t0) for n in names
             ])
@@ -261,7 +272,8 @@ class Pipeline:
             await _emit(emit, stage="audit", variant=v.name, status="done", score=audit.score, issues=len(audit.issues),
                         t=round(time.time() - t0, 2))
 
-            # deterministic, safe autofix round (user can still review and pick the rest)
+            # детерминированный безопасный раунд автоисправлений (остальное пользователь может просмотреть и
+            # выбрать)
             safe = [i for i in audit.issues if i.deterministic and i.fix in AUTO_SAFE and i.severity.value != "info"]
             if safe and self.cfg.pipeline.auto_fix and self.agent.enabled("autofix"):
                 ts = time.time()
@@ -275,7 +287,8 @@ class Pipeline:
                                    render_ok=render_ok)
                 visual_issues = [i for i in audit.issues if not i.deterministic]
                 audit = await run_audit(ctx, None, None, visual=False)
-                audit.issues += visual_issues  # contextual findings are kept until the user acts on them
+                # контекстные замечания хранятся, пока пользователь по ним не решит
+                audit.issues += visual_issues
                 vr.timings["autofix"] = round(time.time() - ts, 2)
                 await _emit(emit, stage="autofix", variant=v.name, status="done", score=audit.score, t=round(time.time() - t0, 2))
             vr.audit = audit
@@ -301,6 +314,7 @@ class Pipeline:
         return vr
 
     async def _render(self, pptx: Path, out: Path):
+        """Рендер колоды в PDF и PNG: (картинки, pdf, успех); при сбое рендера — пустой результат."""
         try:
             pdf = await asyncio.to_thread(pptx_to_pdf, pptx, out, self.cfg.render.timeout_s)
             pngs = await asyncio.to_thread(pdf_to_pngs, pdf, out / "png", self.cfg.render.dpi)
@@ -310,6 +324,7 @@ class Pipeline:
             return [], None, False
 
     async def _shorten(self, pptx: Path, overflows, llm: LLMClient) -> None:
+        """Сокращает текст, который не поместился в рамку, через скилл `shortener`."""
         from pptx import Presentation
 
         skill = load_skill("shortener")
@@ -332,6 +347,7 @@ class Pipeline:
         prs.save(str(pptx))
 
     def _manifest(self, run_id, rdir: Path, profile, corpus, brief, plan, mode, results, timings) -> Path:
+        """Пишет манифест запуска: время этапов, версии скиллов, телеметрия модели, обоснования вёрстки."""
         skills_used = {}
         for step in self.agent.steps:
             ref = step.get("skill")

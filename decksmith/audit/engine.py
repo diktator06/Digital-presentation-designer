@@ -1,8 +1,8 @@
-"""Audit engine = deterministic rules + contextual (VLM) questions -> AuditReport.
+"""Движок аудита = детерминированные правила + контекстные (VLM) вопросы -> AuditReport.
 
-Contextual checks answer the yes/no questions of Annex 1 from the slide image;
-they may differ between runs and are therefore reported separately
-(`deterministic=False`) and never auto-applied without the user's choice.
+Контекстные проверки отвечают на вопросы «да/нет» Приложения 1 по картинке слайда;
+от запуска к запуску ответы могут отличаться, поэтому они выводятся отдельно
+(`deterministic=False`) и никогда не применяются автоматически без выбора пользователя.
 """
 from __future__ import annotations
 
@@ -37,7 +37,8 @@ WEIGHTS = {Severity.error: 4.0, Severity.warning: 1.5, Severity.info: 0.4}
 
 
 def _facts_for(ctx: AuditContext, i: int) -> str:
-    """Sources a slide may quote: the content pack and the user's brief (its figures are facts too)."""
+    """Источники, которые может цитировать слайд: контент-пакет и бриф пользователя (его цифры — тоже факты).
+    """
     nums = ", ".join(ctx.corpus.numbers[:60]) if ctx.corpus else ""
     brief = list(dict.fromkeys(normalize_number(m.group(0)) for m in NUM_RE.finditer(ctx.brief_text or "")))
     spec = ctx.plan.slides[i] if ctx.plan and i < len(ctx.plan.slides) else None
@@ -47,7 +48,7 @@ def _facts_for(ctx: AuditContext, i: int) -> str:
 
 
 async def visual_audit(ctx: AuditContext, llm: LLMClient, agent: Agent) -> list[AuditIssue]:
-    # contextual checks need a multimodal model: never send slide images to a text-only one
+    # контекстным проверкам нужна мультимодальная модель: картинки слайдов никогда не отправляются текстовой
     if not llm.enabled or not ctx.pngs or not llm.cfg.vlm_model:
         return []
     skill = skill_for_step(agent, "audit_visual", "visual_audit")
@@ -59,7 +60,7 @@ async def visual_audit(ctx: AuditContext, llm: LLMClient, agent: Agent) -> list[
         spec = ctx.plan.slides[i] if ctx.plan and i < len(ctx.plan.slides) else None
         intent = spec.intent.value if spec else ""
         if spec is not None and "[summary]" in (spec.notes or ""):
-            intent = "agenda"  # the list of conclusions is itself the point of a summary slide
+            intent = "agenda"  # список выводов и есть суть итогового слайда
         try:
             res = await llm.run_skill(skill, None, images=[ctx.pngs[i]], index=i + 1, total=n, title=titles[i],
                                       prev_title=titles[i - 1] if i else "", next_title=titles[i + 1] if i + 1 < n else "",
@@ -74,9 +75,9 @@ async def visual_audit(ctx: AuditContext, llm: LLMClient, agent: Agent) -> list[
             if q not in VLM_QUESTIONS or val is not False:
                 continue
             if kind in ("title", "section", "thanks", "quote", "contacts") and q in ("q1", "q2", "q3", "q5", "q10"):
-                continue  # covers/dividers carry no argument and no body by design
+                continue  # у обложек/разделителей по замыслу нет тезиса и тела
             if intent == "agenda" and q == "q1":
-                continue  # a table of contents or a summary is named, not concluded
+                continue  # содержание или итоги называются, а не формулируются выводом
             cid, title, fixer = VLM_QUESTIONS[q]
             out.append(AuditIssue(
                 id=f"{cid}#{i}", check=cid, category="content" if q.startswith("q") else "layout", deterministic=False,
@@ -90,11 +91,13 @@ async def visual_audit(ctx: AuditContext, llm: LLMClient, agent: Agent) -> list[
 
 
 def score(issues: list[AuditIssue], n_slides: int) -> float:
+    """Итоговый балл 0–100: штраф по серьёзности замечаний в расчёте на слайд."""
     penalty = sum(WEIGHTS[i.severity] for i in issues)
     return round(max(0.0, 100.0 - penalty * 10 / max(n_slides, 1)), 1)
 
 
 async def run_audit(ctx: AuditContext, llm: LLMClient | None = None, agent: Agent | None = None, visual: bool = True) -> AuditReport:
+    """Полный аудит: детерминированные правила + (при наличии VLM) смысловые вопросы по картинке слайда."""
     t0 = time.time()
     issues, ran = run_rules(ctx)
     if visual and llm is not None and agent is not None:
@@ -107,7 +110,7 @@ async def run_audit(ctx: AuditContext, llm: LLMClient | None = None, agent: Agen
 
 
 def catalogue() -> list[dict]:
-    """All checks with their nature — shown in UI and AUDIT.md."""
+    """Все проверки с их природой — показываются в UI и AUDIT.md."""
     rows = [{"id": m.id, "category": m.category, "title": m.title, "deterministic": True, "fixer": m.fixer} for m in CHECKS.values()]
     rows += [{"id": cid, "category": "content" if q.startswith("q") else "layout", "title": title, "deterministic": False,
               "fixer": fixer, "question": q} for q, (cid, title, fixer) in VLM_QUESTIONS.items()]

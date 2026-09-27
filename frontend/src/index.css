@@ -35,7 +35,7 @@ h3 { font-size: 15px; font-weight: 650; }
 .grow { flex: 1; min-width: 0; }
 .spacer { flex: 1; }
 
-/* app shell */
+/* оболочка приложения */
 .topbar { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 24px; height: 56px; padding: 0 24px; background: var(--panel); border-bottom: 1px solid var(--line); }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 16px; }
 .brand-mark { width: 28px; height: 28px; border-radius: 8px; background: var(--accent); display: grid; place-items: center; }
@@ -49,7 +49,7 @@ h3 { font-size: 15px; font-weight: 650; }
 .dot.off { background: var(--warn); }
 main { padding: 24px; max-width: 1680px; margin: 0 auto; }
 
-/* primitives */
+/* примитивы */
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
 .pad { padding: 16px; }
 .btn { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--line); background: var(--panel); padding: 8px 14px; border-radius: 8px; cursor: pointer; font-weight: 550; white-space: nowrap; }
@@ -79,7 +79,7 @@ textarea:focus, select:focus, input:focus { outline: 2px solid var(--accent-soft
 .empty { padding: 48px; text-align: center; color: var(--ink-3); }
 .kbd { font-family: ui-monospace, Menlo, monospace; font-size: 11px; padding: 1px 5px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; background: var(--panel); }
 
-/* generate */
+/* генерация */
 .gen { display: grid; grid-template-columns: 400px 1fr; gap: 24px; align-items: start; }
 .composer { position: sticky; top: 80px; }
 .tpl-pick { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
@@ -103,7 +103,7 @@ textarea:focus, select:focus, input:focus { outline: 2px solid var(--accent-soft
 .thumbs img { width: 100%; border-radius: 4px; border: 1px solid var(--line); display: block; cursor: pointer; }
 .variant-foot { display: flex; gap: 6px; padding: 12px; border-top: 1px solid var(--line); flex-wrap: wrap; }
 
-/* viewer */
+/* просмотр варианта */
 .viewer { display: grid; grid-template-columns: 170px 1fr 420px; gap: 16px; height: calc(100vh - 150px); }
 .rail { overflow: auto; display: flex; flex-direction: column; gap: 8px; padding-right: 4px; }
 .rail button { position: relative; border: 2px solid transparent; padding: 0; border-radius: 6px; background: none; cursor: pointer; }
@@ -127,7 +127,7 @@ textarea:focus, select:focus, input:focus { outline: 2px solid var(--accent-soft
 .issue .meta { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
 .group-title { padding: 10px 12px 6px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-3); background: var(--panel); position: sticky; top: 0; }
 
-/* templates */
+/* шаблоны */
 .tpl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; }
 .tpl-card { overflow: hidden; cursor: pointer; }
 .tpl-card img { display: block; width: 100%; aspect-ratio: 16/9; object-fit: cover; border-bottom: 1px solid var(--line); }

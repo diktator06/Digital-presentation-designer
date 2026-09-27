@@ -1,11 +1,11 @@
-"""Room a text frame may grow into.
+"""Место, на которое может вырасти текстовая рамка.
 
-The organisers clarified the "text did not fit its frame" rule: a text frame may be resized
-inside its visual block (card, plate, panel, photo) as long as the text stays within the
-block and the slide keeps its structure. So before shrinking type, the builder and the
-audit fixer grow the frame: down (or up / both ways, following the text anchor) to the
-block's inner padding, or, outside any block, to the content area of the slide, never
-closer to other objects than they already were.
+Организаторы уточнили правило «текст не поместился в рамку»: текстовую рамку можно
+увеличивать внутри её визуального блока (карточка, подложка, панель, фото), если текст
+остаётся в блоке, а слайд сохраняет структуру. Поэтому до уменьшения кегля сборщик и
+фиксер аудита увеличивают рамку: вниз (или вверх / в обе стороны, по привязке текста) до
+внутреннего отступа блока, а вне блоков — до области контента слайда, никогда не
+приближаясь к другим объектам сильнее, чем было.
 """
 from __future__ import annotations
 
@@ -19,14 +19,14 @@ from decksmith.parsing.elements import text_anchor, text_insets
 from decksmith.parsing.ooxml import EffStyle, StyleResolver, flatten_shapes, parse_theme
 
 _FILLS = ("solidFill", "gradFill", "blipFill", "pattFill")
-GAP = int(0.06 * 914400)  # distance kept to the next object when the original one was larger
+GAP = int(0.06 * 914400)  # отступ до следующего объекта, если исходный был больше
 
-# (owned box, top, bottom, frame box) in slide coordinates
+# (своя рамка, верх, низ, рамка фигуры) в координатах слайда
 Room = tuple[Box, int, int, Box]
 
 
 def frame_visible(el) -> bool:
-    """The shape paints its own frame (fill or outline; an explicit noFill wins over the theme style)."""
+    """Фигура рисует собственную рамку (заливка или контур; явный noFill важнее стиля темы)."""
     sp_pr = el.find(qn("p:spPr"))
     kids = [etree.QName(c).localname for c in sp_pr] if sp_pr is not None else []
     style = el.find(qn("p:style"))
@@ -48,13 +48,13 @@ def frame_visible(el) -> bool:
 
 
 def is_plate(shape) -> bool:
-    """A visible surface that can frame text: a picture or a filled/outlined shape."""
+    """Видимая поверхность, которая может обрамлять текст: картинка или фигура с заливкой/контуром."""
     tag = etree.QName(shape._element).localname
     return tag == "pic" or (tag == "sp" and frame_visible(shape._element))
 
 
 def draws(shape) -> bool:
-    """Anything a grown frame must keep clear of (empty invisible frames draw nothing)."""
+    """Всё, от чего выросшая рамка должна держаться в стороне (пустые невидимые рамки ничего не рисуют)."""
     el = shape._element
     if etree.QName(el).localname != "sp":
         return True
@@ -62,8 +62,9 @@ def draws(shape) -> bool:
 
 
 def rotated(sh) -> bool:
-    """The frame, a group around it or the layout placeholder it inherits from is rotated
-    (room is computed for upright boxes only)."""
+    """Рамка, группа вокруг неё или плейсхолдер макета, от которого она наследуется, повёрнуты (место
+    считается только для неповёрнутых рамок).
+    """
     node = sh._element
     while node is not None and etree.QName(node).localname in ("sp", "grpSp", "graphicFrame", "pic"):
         xfrm = node.find(qn("p:spPr") + "/" + qn("a:xfrm"))
@@ -73,7 +74,7 @@ def rotated(sh) -> bool:
             return True
         node = node.getparent()
     base = sh
-    for _ in range(2):  # layout, then master placeholder
+    for _ in range(2):  # макет, затем плейсхолдер мастера
         try:
             base = base._base_placeholder if getattr(base, "is_placeholder", False) else None
         except Exception:
@@ -87,12 +88,13 @@ def rotated(sh) -> bool:
 
 
 def text_room(slide, sh, tokens: DesignTokens, owned_h: int | None = None, keep_clear: list[Box] = ()) -> Room | None:
-    """Vertical span the frame `sh` may take. `owned_h` limits the frame's own height when its
-    shape is larger than the part it owns (a card-sized heading frame above a body frame);
-    `keep_clear` are zones drawn by the layout/master (logo, footer, page number).
-    None when the frame cannot be located, is rotated or is itself a visible plate."""
+    """Вертикальный промежуток, который может занять рамка `sh`. `owned_h` ограничивает собственную высоту
+    рамки, когда фигура больше принадлежащей ей части (рамка заголовка размером с карточку над рамкой
+    текста); `keep_clear` — зоны, которые рисуют макет/мастер (логотип, колонтитул, номер страницы). None,
+    если рамку не найти, она повёрнута или сама является видимой подложкой.
+    """
     if frame_visible(sh._element) or rotated(sh):
-        return None  # resizing a painted frame would resize a card of the design
+        return None  # изменение размера окрашенной рамки изменило бы карточку дизайна
     recs = [r for r in flatten_shapes(slide.shapes) if r.shape.shape_type != MSO_SHAPE_TYPE.GROUP]
     me = next((r for r in recs if r.shape._element is sh._element), None)
     if me is None or me.box.w <= 0 or me.box.h <= 0:
@@ -107,7 +109,7 @@ def text_room(slide, sh, tokens: DesignTokens, owned_h: int | None = None, keep_
         if b.area > own.area and b.x - tol <= own.x and own.r <= b.r + tol and b.y - tol <= own.y < b.b and is_plate(r.shape):
             block = b if block is None or b.area < block.area else block
     if block is not None:
-        pad = max(min(own.x - block.x, block.r - own.r), GAP)  # the block's inner padding stays
+        pad = max(min(own.x - block.x, block.r - own.r), GAP)  # внутренний отступ блока сохраняется
         top = block.y + min(max(own.y - block.y, 0), pad)
         bottom = block.b - min(max(block.b - own.b, 0), pad)
     else:
@@ -115,7 +117,7 @@ def text_room(slide, sh, tokens: DesignTokens, owned_h: int | None = None, keep_
     obstacles = [r.box for r in others if draws(r.shape)] + list(keep_clear)
     for b in obstacles:
         if b.x - tol <= own.x and own.r <= b.r + tol and b.y - tol <= own.y and own.b <= b.b + tol:
-            continue  # behind the frame: its block or a panel
+            continue  # за рамкой: её блок или панель
         if min(b.r, own.r) - max(b.x, own.x) <= 0.02 * own.w:
             continue
         if b.y >= own.b - tol:
@@ -126,8 +128,9 @@ def text_room(slide, sh, tokens: DesignTokens, owned_h: int | None = None, keep_
 
 
 def clear_title_box(box: Box, title_clear: Box | None) -> Box | None:
-    """Title frame shortened to end before background art that the layout draws inside the title
-    band (a logo strip baked into the background, corner graphics); None when already clear."""
+    """Рамка заголовка, укороченная так, чтобы заканчиваться до фоновой графики, которую макет рисует в полосе
+    заголовка (полоса логотипов в фоновой картинке, угловая графика); None, если она уже свободна.
+    """
     tc = title_clear
     if tc is None or box.r <= tc.r:
         return None
@@ -140,8 +143,9 @@ def clear_title_box(box: Box, title_clear: Box | None) -> Box | None:
 
 
 def owned_height(slot, filled: list) -> int:
-    """Height of a slot's frame down to the next filled frame that starts inside it (frames of an
-    example overlap: a one-line title frame whose lower part hosts the subtitle)."""
+    """Высота рамки слота до следующей заполненной рамки, начинающейся внутри неё (рамки примера
+    перекрываются: однострочная рамка заголовка, в нижней части которой стоит подзаголовок).
+    """
     b = slot.box
     tops = [o.box.y for o in filled if o is not slot and b.y + 0.1 * b.h < o.box.y < b.b
             and min(o.box.r, b.r) - max(o.box.x, b.x) > 0.3 * min(o.box.w, b.w)]
@@ -149,7 +153,7 @@ def owned_height(slot, filled: list) -> int:
 
 
 def paragraph_styles(slide, sh) -> tuple[list[str], list[EffStyle]]:
-    """Non-empty paragraphs of a frame with their effective style, spacing included."""
+    """Непустые абзацы рамки с их эффективным стилем, включая интервалы."""
     res = StyleResolver(slide, parse_theme(slide.slide_layout.slide_master))
     paras, styles = [], []
     for p in sh.text_frame.paragraphs:
@@ -161,13 +165,15 @@ def paragraph_styles(slide, sh) -> tuple[list[str], list[EffStyle]]:
 
 
 def spacing(styles: list[EffStyle]) -> tuple[float, float]:
-    """(pt of paragraph spacing between the paragraphs, largest line-spacing multiplier)."""
+    """(пт интервалов между абзацами, наибольший множитель межстрочного интервала)."""
     gaps = sum(s.space_before for s in styles[1:]) + sum(s.space_after for s in styles[:-1])
     return gaps, max((s.line for s in styles), default=1.0)
 
 
 def text_height(slide, sh, width: int, font: str) -> int:
-    """Height the frame's text needs as set now (sizes, spacing, insets), as the audit measures it."""
+    """Высота, нужная тексту рамки в текущем виде (кегли, интервалы, внутренние отступы), так же как её меряет
+    аудит.
+    """
     paras, styles = paragraph_styles(slide, sh)
     if not paras:
         return 0
@@ -178,14 +184,15 @@ def text_height(slide, sh, width: int, font: str) -> int:
 
 
 def grow_frame(sh, room: Room, need: int) -> bool:
-    """Resize the frame to the text height inside its room, keeping the anchored edge
-    (top-anchored text stays where it starts, centred text stays centred)."""
+    """Меняет высоту рамки под высоту текста в пределах доступного места, сохраняя край привязки (текст с
+    привязкой к верху остаётся на месте, центрированный — по центру).
+    """
     own, top, bottom, fb = room
     if need <= own.h:
         return False
-    new_h = min(int(need * 1.04) + 6350, bottom - top)  # slack for renderer line metrics
+    new_h = min(int(need * 1.04) + 6350, bottom - top)  # запас на метрики строк рендерера
     if new_h <= fb.h:
-        return False  # never shrink a frame
+        return False  # рамка никогда не уменьшается
     anchor = text_anchor(sh)
     y = own.b - new_h if anchor == "b" else (own.y + (own.h - new_h) // 2 if anchor == "ctr" else own.y)
     y = min(max(y, top), bottom - new_h)
@@ -193,6 +200,7 @@ def grow_frame(sh, room: Room, need: int) -> bool:
         lx, ly, lw, lh = int(sh.left), int(sh.top), int(sh.width), int(sh.height)
     except (TypeError, ValueError):
         return False
-    k = fb.h / lh if lh else 1.0  # children of a group live in the group's coordinates
-    sh.left, sh.top, sh.width, sh.height = lx, int(ly + (y - fb.y) / k), lw, int(new_h / k)  # pin all four
+    k = fb.h / lh if lh else 1.0  # дочерние фигуры группы живут в координатах группы
+    # фиксируем все четыре
+    sh.left, sh.top, sh.width, sh.height = lx, int(ly + (y - fb.y) / k), lw, int(new_h / k)
     return True

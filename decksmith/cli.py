@@ -1,4 +1,4 @@
-"""Command line: decksmith analyze | run | audit | serve | skills."""
+"""Командная строка: decksmith analyze | run | audit | serve | skills."""
 from __future__ import annotations
 
 import argparse
@@ -16,11 +16,13 @@ from decksmith.core.logging import setup_logging
 
 
 def _p(path: str) -> Path:
+    """Путь из аргумента: относительный путь, которого нет в текущем каталоге, ищется от корня проекта."""
     p = Path(path)
     return p if p.is_absolute() else (ROOT / p if not p.exists() else p)
 
 
 def cmd_analyze(a) -> None:
+    """decksmith analyze: разбор шаблона, сводка профиля и картинка декомпозиции."""
     from decksmith.parsing.debug import contact_sheet
     from decksmith.parsing.template_parser import analyze_template, summarize
 
@@ -37,7 +39,8 @@ def cmd_run(a) -> None:
     from decksmith.pipeline import Pipeline
 
     cfg = yaml.safe_load(_p(a.config).read_text(encoding="utf-8"))
-    if cfg.get("offline"):  # no model calls at all, whatever .env says (offline planner, rules-only audit)
+    # никаких вызовов модели, что бы ни было в .env (офлайн-планировщик, аудит только по правилам)
+    if cfg.get("offline"):
         os.environ["DECKSMITH_LLM_PROVIDER"] = "offline"
         settings.cache_clear()
     if cfg.get("settings"):
@@ -55,9 +58,11 @@ def cmd_run(a) -> None:
     print(f"[pre-Enter] templates={len(profiles)} content chunks={len(corpus.chunks)} in {time.time() - t0:.1f}s")
 
     async def go():
+        """Прогон всех шаблонов конфига по очереди со сводкой результатов."""
         summary = []
         for prof in profiles:
             def emit(ev, _n=prof.name):
+                """Печатает ключевые этапы прогресса варианта."""
                 if ev.get("status") == "done" and ev.get("stage") in ("plan", "audit", "export", "done"):
                     print(f"  [{_n}] {ev.get('stage')} {ev.get('variant', '')} t={ev.get('t')}s "
                           + (f"score={ev['score']}" if "score" in ev else ""))
@@ -73,6 +78,7 @@ def cmd_run(a) -> None:
 
 
 def cmd_audit(a) -> None:
+    """decksmith audit: аудит готовой колоды по шаблону."""
     from decksmith.audit.context import AuditContext
     from decksmith.audit.engine import run_audit
     from decksmith.parsing.template_parser import analyze_template
@@ -85,12 +91,14 @@ def cmd_audit(a) -> None:
 
 
 def cmd_serve(a) -> None:
+    """decksmith serve: UI + API."""
     import uvicorn
 
     uvicorn.run("decksmith.api.app:app", host=a.host, port=a.port, reload=False)
 
 
 def cmd_skills(a) -> None:
+    """decksmith skills: версии скиллов/агентов и каталог проверок."""
     from decksmith.audit.engine import catalogue
     from decksmith.generation.skills import list_versions
 
@@ -98,6 +106,7 @@ def cmd_skills(a) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
+    """Точка входа командной строки."""
     setup_logging()
     ap = argparse.ArgumentParser("decksmith")
     ap.add_argument("--config", dest="settings", help="settings YAML (default config/default.yaml)")

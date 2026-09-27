@@ -1,4 +1,4 @@
-"""Unit tests: geometry, colours, OOXML inheritance helpers, JSON extraction, skills registry."""
+"""Модульные тесты: геометрия, цвета, помощники наследования OOXML, извлечение JSON, реестр скиллов."""
 import pytest
 
 from decksmith.core.models import Box
@@ -7,6 +7,7 @@ from decksmith.parsing.ooxml import color_distance, contrast_ratio, flatten_shap
 
 
 def test_box_ops():
+    """Операции с рамками: пересечение, объединение, вложенность."""
     a, b = Box(x=0, y=0, w=10, h=10), Box(x=5, y=5, w=10, h=10)
     assert a.intersection(b) == 25
     assert a.union(b) == Box(x=0, y=0, w=15, h=15)
@@ -15,12 +16,12 @@ def test_box_ops():
 
 def test_contrast_wcag():
     assert round(contrast_ratio("000000", "FFFFFF"), 1) == 21.0
-    assert contrast_ratio("8F8F8F", "FFFFFF") < 4.5  # template grey fails WCAG AA
+    assert contrast_ratio("8F8F8F", "FFFFFF") < 4.5  # серый шаблона не проходит WCAG AA
     assert color_distance("0077FF", "0077FF") == 0
 
 
 def test_group_transform_flattening():
-    """Children of a scaled group get absolute slide coordinates."""
+    """Дочерние фигуры масштабированной группы получают абсолютные координаты слайда."""
     from pptx import Presentation
     from pptx.util import Emu
 
@@ -36,13 +37,15 @@ def test_group_transform_flattening():
     '```json\n{"a": 1}\n```',
     'Вот ответ: {"a": 1} надеюсь помог',
     '<think>...</think>{"a": {"b": [1, 2]}}',
-    '{"a": [1, 2',  # truncated output is closed
+    '{"a": [1, 2',  # обрезанный вывод закрывается
 ])
 def test_extract_json(raw):
+    """JSON извлекается из ответа модели в любом обрамлении."""
     assert "a" in extract_json(raw)
 
 
 def test_skills_registry_and_rendering():
+    """Реестр скиллов: версии, загрузка и рендер промптов."""
     from decksmith.generation.skills import list_versions, load_agent, load_skill
 
     v = list_versions()
@@ -60,8 +63,9 @@ def test_skills_registry_and_rendering():
 
 
 def test_font_download_is_time_bounded(monkeypatch):
-    """No network (or a slow one) must never stall template analysis: one failed request
-    switches downloads off for a while."""
+    """Отсутствие сети (или медленная сеть) никогда не должно задерживать разбор шаблона: один неудачный
+    запрос на время отключает загрузки.
+    """
     import time
 
     import httpx
@@ -72,6 +76,7 @@ def test_font_download_is_time_bounded(monkeypatch):
 
     class Offline(httpx.BaseTransport):
         def handle_request(self, request):
+            """Транспорт без сети: каждый запрос падает по таймауту."""
             calls.append(str(request.url))
             raise httpx.ConnectTimeout("offline")
 
@@ -88,7 +93,7 @@ def test_font_download_is_time_bounded(monkeypatch):
 
 
 def test_render_timeout_kills_process_group():
-    """A hung renderer whose children keep running must not block past its timeout."""
+    """Зависший рендерер, чьи дочерние процессы продолжают работать, не должен блокировать дольше таймаута."""
     import subprocess
     import sys
     import time
@@ -106,8 +111,8 @@ def test_render_timeout_kills_process_group():
 
 
 def test_offline_plan_meets_slide_range():
-    """Without a model the deck has the requested number of slides (TZ: 10-15 or as set by
-    the user) and a clean cover."""
+    """Без модели в колоде заданное число слайдов (ТЗ: 10–15 или сколько задал пользователь) и чистая обложка.
+    """
     from pathlib import Path
 
     from decksmith.content.ingest import ingest
@@ -129,7 +134,8 @@ def test_offline_plan_meets_slide_range():
 
 
 def test_model_plan_is_completed_to_the_requested_count():
-    """A model answering one slide short (seen on a hosted Qwen) still yields the requested count."""
+    """Модель, ответившая на один слайд меньше (замечено у Qwen на хостинге), всё равно даёт заданное число.
+    """
     from decksmith.core.models import DeckPlan, Item, PatternKind, SlideSpec
     from decksmith.generation.planner import Brief, Outline, OutlineSlide, _normalize_outline, complete_plan
 
@@ -152,7 +158,7 @@ def test_model_plan_is_completed_to_the_requested_count():
 
 
 def test_every_variant_keeps_the_slide_count():
-    """TZ: the number of slides the user asked for holds for all three variants."""
+    """ТЗ: заданное пользователем число слайдов выдерживается во всех трёх вариантах."""
     from pathlib import Path
 
     from decksmith.core.models import DeckPlan

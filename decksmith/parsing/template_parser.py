@@ -1,17 +1,17 @@
-"""Template analysis orchestrator: .pptx -> TemplateProfile (cached by sha256).
+"""Оркестратор разбора шаблона: .pptx -> TemplateProfile (кэш по sha256).
 
-Stages (all deterministic):
-  1. structure  : masters, layouts, placeholders, themes
-  2. render     : template slides + an "empty layout" probe deck via LibreOffice
-  3. CV         : background luminance / color per slide, free content area per
-                  layout from an occupancy grid of the rendered empty layout
-  4. patterns   : per example slide (+ placeholder-rich layouts)
-  5. tokens     : palette, typography scale, margins, grid
-  6. brand      : logos / footers / page numbers fixed by masters & layouts
-  7. assets     : icon libraries harvested from guide slides
+Этапы (все детерминированные):
+  1. структура  : мастера, макеты, плейсхолдеры, темы
+  2. рендер     : слайды шаблона + пробная колода «пустых макетов» через LibreOffice
+  3. CV         : яркость / цвет фона каждого слайда, свободная зона контента каждого
+                  макета по сетке занятости отрендеренного пустого макета
+  4. паттерны   : по каждому слайду-примеру (+ макеты с большим числом плейсхолдеров)
+  5. токены     : палитра, шкала кеглей, поля, сетка
+  6. бренд      : логотипы / колонтитулы / номера страниц, закреплённые мастерами и макетами
+  7. ресурсы    : наборы иконок со слайдов-инструкций
 
-An optional contextual stage (VLM labelling of patterns) lives in
-generation/labeler.py and only refines `Pattern.kind`/tags.
+Необязательный контекстный этап (разметка паттернов с помощью VLM) находится в
+generation/labeler.py и лишь уточняет `Pattern.kind` и теги.
 """
 from __future__ import annotations
 
@@ -53,7 +53,7 @@ log = logging.getLogger(__name__)
 
 
 def _parser_version() -> str:
-    """Cache key: changes whenever any parsing module changes."""
+    """Ключ кэша: меняется при любом изменении модулей разбора."""
     h = hashlib.sha256()
     for p in sorted(Path(__file__).parent.glob("*.py")):
         h.update(p.read_bytes())
@@ -64,6 +64,7 @@ PARSER_VERSION = _parser_version()
 
 
 def file_sha256(path: str | Path) -> str:
+    """sha256 файла."""
     h = hashlib.sha256()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(1 << 20), b""):
@@ -72,6 +73,7 @@ def file_sha256(path: str | Path) -> str:
 
 
 def all_layouts(prs) -> list[tuple[int, int, object]]:
+    """Все макеты: (глобальный индекс, индекс мастера, макет)."""
     out = []
     for mi, m in enumerate(prs.slide_masters):
         for layout in m.slide_layouts:
@@ -80,6 +82,7 @@ def all_layouts(prs) -> list[tuple[int, int, object]]:
 
 
 def layout_global_index(prs, layout) -> int:
+    """Глобальный индекс макета среди всех мастеров."""
     for gi, _, lay in all_layouts(prs):
         if lay.part is layout.part:
             return gi
@@ -87,10 +90,10 @@ def layout_global_index(prs, layout) -> int:
 
 
 # ----------------------------------------------------------------------------
-# CV helpers
+# Вспомогательные функции CV
 # ----------------------------------------------------------------------------
 def image_stats(png: Path) -> tuple[bool, str, float]:
-    """(is_dark, border background hex, mean luminance) of a rendered slide."""
+    """(тёмный ли, hex фона по краю, средняя яркость) отрендеренного слайда."""
     im = Image.open(png).convert("RGB")
     small = im.resize((160, 90))
     lum = ImageStat.Stat(small.convert("L")).mean[0] / 255
@@ -107,14 +110,13 @@ def image_stats(png: Path) -> tuple[bool, str, float]:
 
 
 def occupancy_grid(png: Path, bg_hex: str, gw: int = 64, gh: int = 36, edges_only: bool = False) -> list[list[bool]]:
-    """Cells of the rendered slide that carry drawing.
-
-    A cell is busy when it holds edges (per RGB channel, so hue-only borders count)
-    or colour far from the background. Colour-distant regions whose border shows
-    almost no edges are smooth glows/gradients of the background itself, not
-    objects: they stay free. Flat panels have sharp borders and stay busy."""
+    """Клетки отрендеренного слайда, на которых что-то нарисовано. Клетка занята, если в ней есть края (по
+    каждому каналу RGB, поэтому границы, отличающиеся только оттенком, тоже считаются) или цвет, далёкий от
+    фона. Области далёкого цвета почти без краёв по границе — это плавные свечения и градиенты самого фона,
+    а не объекты: они остаются свободными. Плоские панели имеют резкие границы и остаются занятыми.
+    """
     im = Image.open(png).convert("RGB")
-    small = im.resize((gw * 4 + 2, gh * 4 + 2))  # 1 px apron: the edge filter rings the image border
+    small = im.resize((gw * 4 + 2, gh * 4 + 2))  # поле в 1 px: фильтр краёв даёт кольцо по границе изображения
     edges = small.filter(ImageFilter.FIND_EDGES)
     px, ex = small.load(), edges.load()
     edge = [[False] * gw for _ in range(gh)]
@@ -163,15 +165,18 @@ def occupancy_grid(png: Path, bg_hex: str, gw: int = 64, gh: int = 36, edges_onl
 
 
 def title_clear_box(png: Path, box: Box, slide_w: int, slide_h: int, bg_hex: str) -> Box | None:
-    """Part of a title frame that is free of background art (logo strips baked into the
-    background picture, corner graphics): the title must not run under them."""
+    """Часть рамки заголовка, свободная от фоновой графики (полосы логотипов в фоновой картинке, угловая
+    графика): заголовок не должен заходить под неё.
+    """
     gw, gh = 64, 36
-    occ = occupancy_grid(png, bg_hex, gw, gh, edges_only=True)  # gradients have no edges, logos do
-    # the band is widened by a row each side: art that only grazes the frame still collides
-    # with text anchored to that edge; two busy cells make a column blocked (not a stray edge)
+    occ = occupancy_grid(png, bg_hex, gw, gh, edges_only=True)  # у градиентов нет краёв, у логотипов есть
+    # полоса расширяется на строку в каждую сторону: графика, лишь задевающая рамку, всё равно
+    # сталкивается с текстом, прижатым к этому краю; две занятые клетки блокируют колонку (это не случайный
+    # край)
     y0, y1 = max(0, int(box.y / slide_h * gh) - 1), min(gh, int(box.b / slide_h * gh) + 2)
     x0, x1 = max(0, int(box.x / slide_w * gw)), min(gw, int(box.r / slide_w * gw))
-    run_min = max(8, int(0.15 * gw))  # long horizontal runs are rules/underlines, not art to avoid
+    # длинные горизонтальные отрезки — линейки и подчёркивания, а не графика, которую надо обходить
+    run_min = max(8, int(0.15 * gw))
     for gy in range(y0, y1):
         gx = 0
         while gx < gw:
@@ -185,7 +190,7 @@ def title_clear_box(png: Path, box: Box, slide_w: int, slide_h: int, bg_hex: str
                 for k in range(gx, end):
                     occ[gy][k] = False
             gx = end
-    start = x0 + max(2, (x1 - x0) // 3)  # the first third may hold the title's own accent graphics
+    start = x0 + max(2, (x1 - x0) // 3)  # в первой трети может стоять собственная акцентная графика заголовка
     for gx in range(start, x1):
         if sum(occ[gy][gx] for gy in range(y0, y1)) >= 2:
             new_r = int(gx / gw * slide_w) - int(0.01 * slide_w)
@@ -196,13 +201,11 @@ def title_clear_box(png: Path, box: Box, slide_w: int, slide_h: int, bg_hex: str
 
 
 def free_content_box(png: Path, slide_w: int, slide_h: int, below_y: int, margins, bg_hex: str) -> tuple[Box | None, bool]:
-    """Largest empty rectangle below `below_y` on a rendered empty layout -> (box, textured).
-
-    Occupancy (`occupancy_grid`) on a 64x36 grid; the maximal all-free rectangle
-    is found with the histogram method.
-    A background that is busy almost everywhere (photo, texture, blueprint grid)
-    is reported as `textured`: then the whole area under the title is usable and
-    the composer puts content on a plate for legibility.
+    """Наибольший пустой прямоугольник ниже `below_y` на отрендеренном пустом макете -> (рамка, текстура).
+    Занятость (`occupancy_grid`) считается на сетке 64×36; наибольший полностью свободный прямоугольник
+    находится методом гистограмм. Фон, занятый почти везде (фото, текстура, сетка чертежа), помечается как
+    `textured`: тогда годится вся область под заголовком, а компоновщик ставит контент на подложку для
+    читаемости.
     """
     gw, gh = 64, 36
     occ = occupancy_grid(png, bg_hex, gw, gh)
@@ -216,7 +219,7 @@ def free_content_box(png: Path, slide_w: int, slide_h: int, below_y: int, margin
                   h=int(max(y_max - y0, 1) / gh * slide_h))
     if busy_share > 0.45:
         return default, True
-    best = (0, 0, 0, 0, 0)  # area, x, y, w, h
+    best = (0, 0, 0, 0, 0)  # площадь, x, y, w, h
     heights = [0] * gw
     for gy in range(y0, y_max):
         for gx in range(gw):
@@ -235,13 +238,13 @@ def free_content_box(png: Path, slide_w: int, slide_h: int, below_y: int, margin
         return default, True
     _, bx, by, bw, bh = best
     box = Box(x=int(bx / gw * slide_w), y=int(by / gh * slide_h), w=int(bw / gw * slide_w), h=int(bh / gh * slide_h))
-    if box.area < 0.18 * default.area:  # only slivers are free: treat the background as texture
+    if box.area < 0.18 * default.area:  # свободны лишь узкие полосы: считаем фон текстурой
         return default, True
     return box, False
 
 
 def region_color(png: Path, box: Box, slide_w: int, slide_h: int) -> str | None:
-    """Dominant rendered colour inside a region (what text placed there will sit on)."""
+    """Преобладающий цвет рендера внутри области (то, на чём окажется поставленный туда текст)."""
     im = Image.open(png).convert("RGB")
     sx, sy = im.width / slide_w, im.height / slide_h
     crop = im.crop((int(box.x * sx), int(box.y * sy), max(int(box.r * sx), int(box.x * sx) + 2), max(int(box.b * sy), int(box.y * sy) + 2)))
@@ -255,16 +258,17 @@ def region_color(png: Path, box: Box, slide_w: int, slide_h: int) -> str | None:
 
 
 def layout_photo_share(layout, slide_w: int, slide_h: int) -> float:
-    """Share of the slide covered by opaque raster pictures that the layout itself draws
-    (not placeholders): a photo collage baked into a layout shows on every slide built on it,
-    whatever the slide is about. Transparent PNG art (logos, 3D shapes) does not count."""
+    """Доля слайда под непрозрачными растровыми картинками, которые рисует сам макет (не плейсхолдеры):
+    фотоколлаж, вшитый в макет, виден на каждом слайде на его основе, о чём бы слайд ни был. Прозрачная
+    PNG-графика (логотипы, 3D-фигуры) не считается.
+    """
     from io import BytesIO
 
     total = 0
     stack = list(layout.shapes)
     while stack:
         shp = stack.pop()
-        if shp.shape_type == 6:  # group
+        if shp.shape_type == 6:  # группа
             stack.extend(shp.shapes)
             continue
         if getattr(shp, "is_placeholder", False) or shp.width is None or shp.height is None:
@@ -277,21 +281,22 @@ def layout_photo_share(layout, slide_w: int, slide_h: int) -> float:
             im = Image.open(BytesIO(layout.part.related_part(rid).blob))
             if im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info):
                 if im.convert("RGBA").getchannel("A").resize((32, 32)).getextrema()[0] < 200:
-                    continue  # cut-out art, not a photo
+                    continue  # вырезанная графика, а не фото
         except Exception:
             continue
         x0, y0 = max(int(shp.left), 0), max(int(shp.top), 0)
         x1, y1 = min(int(shp.left + shp.width), slide_w), min(int(shp.top + shp.height), slide_h)
         area = max(x1 - x0, 0) * max(y1 - y0, 0)
         if area > 0.85 * slide_w * slide_h:
-            continue  # full-bleed background image, not a picture on the slide
+            continue  # фоновая картинка во весь слайд, а не изображение на слайде
         total += area
     return round(min(total / (slide_w * slide_h), 1.0), 3)
 
 
 def region_colors(png: Path, box: Box, slide_w: int, slide_h: int, min_share: float = 0.1) -> list[str]:
-    """Rendered colours covering at least `min_share` of a region (a gradient gives several):
-    text placed there must be readable on each of them."""
+    """Цвета рендера, занимающие не меньше `min_share` области (градиент даёт несколько): текст, поставленный
+    туда, должен читаться на каждом из них.
+    """
     im = Image.open(png).convert("RGB")
     sx, sy = im.width / slide_w, im.height / slide_h
     crop = im.crop((int(box.x * sx), int(box.y * sy), max(int(box.r * sx), int(box.x * sx) + 2), max(int(box.b * sy), int(box.y * sy) + 2)))
@@ -303,7 +308,7 @@ def region_colors(png: Path, box: Box, slide_w: int, slide_h: int, min_share: fl
 
 
 def rendered_palette(pngs: list[Path]) -> Counter:
-    """Colours the template actually shows (backgrounds, art, bands), weighted by area."""
+    """Цвета, которые шаблон действительно показывает (фоны, графика, полосы), с весом по площади."""
     acc: Counter = Counter()
     for p in pngs:
         try:
@@ -318,8 +323,9 @@ def rendered_palette(pngs: list[Path]) -> Counter:
 
 
 def mark_repeated_brand_texts(slide_elements: list[list[Element]], sw: int, sh: int) -> None:
-    """Text repeated at the same edge position on most example slides ("Confidential",
-    "© Company", a product name in the corner) is brand furniture, not a content slot."""
+    """Текст, повторяющийся в одном и том же месте у края на большинстве слайдов-примеров («Конфиденциально»,
+    «© Компания», название продукта в углу), — бренд-элемент, а не слот контента.
+    """
     from decksmith.parsing.elements import is_filler_text
 
     n = len(slide_elements)
@@ -327,6 +333,7 @@ def mark_repeated_brand_texts(slide_elements: list[list[Element]], sw: int, sh: 
         return
 
     def key(e: Element):
+        """Ключ повторяющегося текста: нормализованный текст и позиция на сетке."""
         return (re.sub(r"\s+", " ", e.text.strip().lower()), round(e.box.x / (0.02 * sw)), round(e.box.y / (0.02 * sh)))
 
     counts: Counter = Counter()
@@ -343,8 +350,9 @@ def mark_repeated_brand_texts(slide_elements: list[list[Element]], sw: int, sh: 
 
 
 def normalize_input(path: Path, workdir: Path) -> Path:
-    """Accept .pptx, .potx/.pptm/.potm (content-type rewrite) and anything LibreOffice
-    opens (.ppt, .odp, .otp, .key...) by converting it to .pptx."""
+    """Принимает .pptx, .potx/.pptm/.potm (замена content-type) и всё, что открывает LibreOffice (.ppt, .odp,
+    .otp, .key...), с конвертацией в .pptx.
+    """
     suffix = path.suffix.lower()
     out = workdir / "template.pptx"
     if suffix == ".pptx":
@@ -359,7 +367,7 @@ def normalize_input(path: Path, workdir: Path) -> Path:
                                   rb"application/vnd\.openxmlformats-officedocument\.presentationml\.template\.main\+xml",
                                   b"application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml", data)
                 if item.filename.lower().endswith("vbaproject.bin"):
-                    continue  # macros are never executed nor kept
+                    continue  # макросы никогда не выполняются и не сохраняются
                 zout.writestr(item, data)
         return out
     tmp = Path(tempfile.mkdtemp(prefix="decksmith_convert_"))
@@ -376,9 +384,10 @@ def normalize_input(path: Path, workdir: Path) -> Path:
 
 
 # ----------------------------------------------------------------------------
-# Rendering stage
+# Этап рендера
 # ----------------------------------------------------------------------------
 def _render_template(path: Path, out: Path) -> list[Path]:
+    """Рендер слайдов шаблона в PNG (миниатюры паттернов)."""
     pdf = pptx_to_pdf(path, out)
     pngs = pdf_to_pngs(pdf, out / "slides", dpi=48, prefix="slide")
     pdf.unlink(missing_ok=True)
@@ -386,7 +395,7 @@ def _render_template(path: Path, out: Path) -> list[Path]:
 
 
 def _render_layout_probe(path: Path, out: Path) -> list[Path]:
-    """One empty slide per layout (placeholders removed) -> PNG per layout."""
+    """По одному пустому слайду на макет (плейсхолдеры удалены) -> PNG на каждый макет."""
     prs = Presentation(str(path))
     sldIdLst = prs.slides._sldIdLst
     for sldId in list(sldIdLst):
@@ -395,7 +404,7 @@ def _render_layout_probe(path: Path, out: Path) -> list[Path]:
     from pptx.oxml.ns import qn
 
     for container in list(prs.slide_masters) + [lay for _, _, lay in all_layouts(prs)]:
-        for ph in container.placeholders:  # prompt text would read as occupied area
+        for ph in container.placeholders:  # текст-подсказка выглядел бы занятой областью
             if "FOOTER" in str(ph.placeholder_format.type) or "SLIDE_NUMBER" in str(ph.placeholder_format.type):
                 continue
             for t in ph._element.iter(qn("a:t")):
@@ -414,12 +423,13 @@ def _render_layout_probe(path: Path, out: Path) -> list[Path]:
 
 
 # ----------------------------------------------------------------------------
-# Brand elements & icons
+# Бренд-элементы и иконки
 # ----------------------------------------------------------------------------
 def _brand_elements(container, theme: Theme, sw: int, sh: int, source: str) -> list[BrandElement]:
     out = []
     for e in extract_elements(container, theme, sw, sh, include_empty_placeholders=True):
-        # logos / wordmarks: small objects hugging an edge (big edge art is decoration, not a logo)
+        # логотипы и надписи-знаки: небольшие объекты у края (крупная графика у края — оформление, а не
+        # логотип)
         near_edge = e.box.y > 0.85 * sh or e.box.b < 0.15 * sh or e.box.x > 0.85 * sw or e.box.r < 0.15 * sw
         small = e.box.area < 0.025 * sw * sh and 0.1 < (e.box.w / max(e.box.h, 1)) < 12
         if e.placeholder == "SLIDE_NUMBER":
@@ -434,6 +444,7 @@ def _brand_elements(container, theme: Theme, sw: int, sh: int, source: str) -> l
 
 
 def _harvest_icons(prs, patterns: list[Pattern], out: Path, sw: int, sh: int) -> list[IconAsset]:
+    """Иконки со слайдов-библиотек шаблона (для карточек и списков)."""
     icons: list[IconAsset] = []
     seen: set[str] = set()
     out.mkdir(parents=True, exist_ok=True)
@@ -462,7 +473,7 @@ def _harvest_icons(prs, patterns: list[Pattern], out: Path, sw: int, sh: int) ->
 
 
 # ----------------------------------------------------------------------------
-# Main entry
+# Главная точка входа
 # ----------------------------------------------------------------------------
 def analyze_template(path: str | Path, *, name: str | None = None, force: bool = False, render: bool = True) -> TemplateProfile:
     t0 = time.time()
@@ -486,7 +497,7 @@ def analyze_template(path: str | Path, *, name: str | None = None, force: bool =
     themes = [parse_theme(m) for m in prs.slide_masters]
     layouts_raw = all_layouts(prs)
 
-    # --- 2. render ---------------------------------------------------------------
+    # --- 2. рендер ---------------------------------------------------------------
     slide_pngs: list[Path] = []
     layout_pngs: list[Path] = []
     if render:
@@ -498,7 +509,7 @@ def analyze_template(path: str | Path, *, name: str | None = None, force: bool =
     slide_cv = [image_stats(p) for p in slide_pngs]
     layout_cv = [image_stats(p) for p in layout_pngs]
 
-    # --- 1. layouts ----------------------------------------------------------------
+    # --- 1. макеты ----------------------------------------------------------------
     layouts: list[LayoutInfo] = []
     for gi, mi, layout in layouts_raw:
         phs = []
@@ -531,7 +542,7 @@ def analyze_template(path: str | Path, *, name: str | None = None, force: bool =
             li.thumbnail = str(layout_pngs[gi])
         layouts.append(li)
 
-    # --- 4. patterns ------------------------------------------------------------------
+    # --- 4. паттерны ------------------------------------------------------------------
     slide_elements: list[list[Element]] = []
     patterns: list[Pattern] = []
     slide_dark, slide_bg = [], []
@@ -565,7 +576,7 @@ def analyze_template(path: str | Path, *, name: str | None = None, force: bool =
             pat.thumbnail = str(slide_pngs[si])
         patterns.append(pat)
 
-    # placeholder-rich layouts become patterns too (templates with few examples)
+    # макеты с большим числом плейсхолдеров тоже становятся паттернами (шаблоны с малым числом примеров)
     for li in layouts:
         if li.body_count + li.picture_count == 0:
             continue
@@ -576,19 +587,19 @@ def analyze_template(path: str | Path, *, name: str | None = None, force: bool =
             slide_w=sw, slide_h=sh, bottom_margin=int(0.06 * sh), dark=li.dark, source="layout",
         )
         pat.thumbnail = li.thumbnail
-        pat.score_hint *= 0.85  # examples are richer than bare layouts
+        pat.score_hint *= 0.85  # примеры богаче голых макетов
         patterns.append(pat)
 
-    # --- fonts -----------------------------------------------------------------------
+    # --- шрифты -----------------------------------------------------------------------
     fams = Counter(e.style.font for els in slide_elements for e in els if e.kind == "text" and e.style and e.style.font)
-    for li in layouts:  # templates with few examples: fonts of layout placeholders count too
+    for li in layouts:  # шаблоны с малым числом примеров: шрифты плейсхолдеров макетов тоже учитываются
         for e in extract_elements(layouts_raw[li.index][2], themes[li.master_index], sw, sh):
             if e.kind == "text" and e.style and e.style.font:
                 fams[e.style.font] += 1
     deadline = time.monotonic() + DOWNLOAD_BUDGET_S
     font_avail = {f: ensure_font(f, deadline=deadline) for f, _ in fams.most_common(6)}
 
-    # --- 5. tokens --------------------------------------------------------------------
+    # --- 5. токены --------------------------------------------------------------------
     render_colors = rendered_palette(slide_pngs or layout_pngs)
     tokens = build_tokens(
         slide_w=sw, slide_h=sh, theme=themes[0], slide_elements=slide_elements, patterns=patterns,
@@ -596,7 +607,7 @@ def analyze_template(path: str | Path, *, name: str | None = None, force: bool =
         render_colors=render_colors,
     )
 
-    # --- 3. free content area per layout + canvas choice ---------------------------------
+    # --- 3. свободная зона контента по макетам + выбор холста ---------------------------------
     for li in layouts:
         if li.thumbnail:
             below = (li.title_box.b if li.title_box else (tokens.title_box.b if tokens.title_box else int(0.2 * sh)))
@@ -607,13 +618,14 @@ def analyze_template(path: str | Path, *, name: str | None = None, force: bool =
             tb_ = li.title_box or tokens.title_box
             if tb_ is not None:
                 li.title_clear = title_clear_box(Path(li.thumbnail), tb_, sw, sh, li.background_hex or tokens.background_hex)
-            # a painted placeholder counts only if the probe render shows it (the probe slide has no
-            # placeholders, so whatever is drawn in its frame comes from the layout itself)
+            # окрашенный плейсхолдер учитывается, только если его видно на пробном рендере (на пробном слайде
+            # нет
+            # плейсхолдеров, так что всё нарисованное в его рамке идёт от самого макета)
             bg_ = li.background_hex or tokens.background_hex
             boxes = {ph["idx"]: Box(**ph["box"]) for ph in li.placeholders}
             li.painted_idx = [i for i in li.painted_idx if i in boxes and boxes[i].area > 0
                               and color_distance(region_color(Path(li.thumbnail), boxes[i], sw, sh) or bg_, bg_) > 20]
-    for pat in patterns:  # slots on visibly painted layout placeholders (see Slot.painted)
+    for pat in patterns:  # слоты на заметно окрашенных плейсхолдерах макета (см. Slot.painted)
         if pat.layout_index is not None and 0 <= pat.layout_index < len(layouts):
             painted = set(layouts[pat.layout_index].painted_idx)
             for sl in pat.slots:
@@ -625,9 +637,9 @@ def analyze_template(path: str | Path, *, name: str | None = None, force: bool =
         uses = sum(1 for p in patterns if p.layout_index == li.index and p.kind in content_kinds)
         area = li.content_box.area / (sw * sh) if li.content_box else 0
         simple = 1.0 if li.body_count + li.picture_count == 0 else 0.7
-        titled = 1.0 if li.has_title else 0.55  # a title placeholder keeps the template's title style
-        calm = 0.6 if li.textured else 1.0  # prefer layouts whose content area is really empty
-        clean = 0.3 if li.painted_idx else 1.0  # painted placeholders would show as empty cards
+        titled = 1.0 if li.has_title else 0.55  # плейсхолдер заголовка сохраняет стиль заголовка шаблона
+        calm = 0.6 if li.textured else 1.0  # предпочтение — макетам с действительно пустой зоной контента
+        clean = 0.3 if li.painted_idx else 1.0  # окрашенные плейсхолдеры выглядели бы пустыми карточками
         return (uses + 1) * area * simple * titled * calm * clean
 
     canvas: dict[str, int] = {}
@@ -642,14 +654,14 @@ def analyze_template(path: str | Path, *, name: str | None = None, force: bool =
             canvas["dark" if best.dark else "light"] = best.index
         warnings.append("no clean canvas layout found; composed slides use the largest free area available")
 
-    # --- 6. brand -----------------------------------------------------------------------
+    # --- 6. бренд -----------------------------------------------------------------------
     brand: list[BrandElement] = []
     for mi, m in enumerate(prs.slide_masters):
         brand += _brand_elements(m, themes[mi], sw, sh, f"master:{mi}")
     for li in layouts:
         brand += _brand_elements(layouts_raw[li.index][2], themes[li.master_index], sw, sh, f"layout:{li.index}")
 
-    # dedupe brand elements repeated on many layouts (same kind + same box)
+    # убираем дубли бренд-элементов, повторяющихся на многих макетах (тот же вид + та же рамка)
     uniq: dict[tuple, BrandElement] = {}
     for b in brand:
         key = (b.kind, round(b.box.x / 50000), round(b.box.y / 50000), round(b.box.w / 50000), round(b.box.h / 50000))
@@ -660,7 +672,7 @@ def analyze_template(path: str | Path, *, name: str | None = None, force: bool =
             uniq[key] = b
     brand = list(uniq.values())
 
-    # --- 7. assets ----------------------------------------------------------------------
+    # --- 7. ресурсы ----------------------------------------------------------------------
     icons = _harvest_icons(prs, patterns, workdir / "icons", sw, sh)
 
     for f in tokens.fonts:
@@ -690,6 +702,7 @@ def analyze_template(path: str | Path, *, name: str | None = None, force: bool =
 
 
 def summarize(prof: TemplateProfile) -> dict:
+    """Краткая сводка профиля для UI и CLI."""
     kinds = Counter(p.kind.value for p in prof.patterns)
     t = prof.tokens
     return {

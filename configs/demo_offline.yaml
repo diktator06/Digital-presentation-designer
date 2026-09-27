@@ -1,5 +1,5 @@
-# Reproducible demo run: 3 templates x 3 variants on one content pack, without any model:
-# offline planner and the rules-only audit, whatever .env says.
+# Воспроизводимый демо-запуск: 3 шаблона × 3 варианта на одном контент-пакете без модели:
+# офлайн-планировщик и аудит только по правилам, что бы ни было в .env.
 # decksmith run configs/demo_offline.yaml
 offline: true
 templates:

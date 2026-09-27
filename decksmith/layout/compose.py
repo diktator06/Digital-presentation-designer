@@ -1,9 +1,9 @@
-"""Native visual composition in the template's design tokens.
+"""Нативная композиция визуализаций в дизайн-токенах шаблона.
 
-Everything is emitted as editable PowerPoint objects: charts (chart parts with
-data), tables, shapes and text boxes. No slide is ever rasterised.
-SmartArt-like diagrams (process, timeline, cycle) are built from native shapes
-grouped by role, which PowerPoint/LibreOffice/Keynote all edit natively.
+Всё создаётся редактируемыми объектами PowerPoint: диаграммы (части chart с
+данными), таблицы, фигуры и текстовые блоки. Ни один слайд не растеризуется.
+Схемы в духе SmartArt (процесс, таймлайн, цикл) собираются из нативных фигур,
+сгруппированных по ролям, — их одинаково редактируют PowerPoint, LibreOffice и Keynote.
 """
 from __future__ import annotations
 
@@ -26,15 +26,17 @@ NO_STYLE_TABLE = "{2D5ABB26-0587-4C30-8999-92F81FD0307C}"
 
 
 # ----------------------------------------------------------------------------
-# Style context
+# Контекст стиля
 # ----------------------------------------------------------------------------
 def mix(a: str, b: str, t: float) -> str:
+    """Смешение двух цветов в доле t."""
     ra, ga, ba = hex_to_rgb(a)
     rb, gb, bb = hex_to_rgb(b)
     return rgb_to_hex((ra + (rb - ra) * t, ga + (gb - ga) * t, ba + (bb - ba) * t))
 
 
 def readable_on(bg: str, candidates: list[str]) -> str:
+    """Самый контрастный к фону цвет из кандидатов (или чёрный/белый, если контраста не хватает)."""
     best = max(candidates, key=lambda c: contrast_ratio(c, bg))
     if contrast_ratio(best, bg) < 4.5:
         best = "FFFFFF" if rel_luminance(bg) < 0.4 else "000000"
@@ -44,15 +46,17 @@ def readable_on(bg: str, candidates: list[str]) -> str:
 @dataclass
 class Style:
     tokens: DesignTokens
-    bg: str  # background of the slide being composed
+    bg: str  # фон собираемого слайда
     dark: bool
-    bg_samples: tuple[str, ...] = ()  # other rendered colours under the content (gradients)
+    bg_samples: tuple[str, ...] = ()  # другие цвета рендера под контентом (градиенты)
 
     def _readable(self, c: str, ratio: float = 4.5) -> bool:
+        """Цвет читается на фоне и на всех его оттенках под контентом."""
         return all(contrast_ratio(c, b) >= ratio for b in (self.bg, *self.bg_samples))
 
     @property
     def text(self) -> str:
+        """Цвет основного текста, читаемый на фоне слайда."""
         t = self.tokens.text_hex
         if self._readable(t):
             return t
@@ -60,6 +64,7 @@ class Style:
 
     @property
     def muted(self) -> str:
+        """Приглушённый цвет текста для подписей, если он ещё читается."""
         for t in (0.35, 0.2):
             m = mix(self.text, self.bg, t)
             if self._readable(m):
@@ -68,27 +73,29 @@ class Style:
 
     @property
     def accent(self) -> str:
+        """Акцентный цвет шаблона."""
         a = self.tokens.accent_hex
         return a
 
     @property
     def accent_text(self) -> str:
-        """Accent usable as text color on the slide bg (>= 3:1 for large text)."""
+        """Акцентный цвет, пригодный для текста на фоне слайда (контраст ≥ 3:1 для крупного текста)."""
         a = self.tokens.accent_hex
         return a if contrast_ratio(a, self.bg) >= 3 else self.text
 
     @property
     def card(self) -> str:
         cf = self.tokens.card_fill_hex
-        # template card color only if it is a quiet surface (close to bg in lightness)
+        # цвет карточки шаблона — только если это спокойная поверхность (близка к фону по светлоте)
         if cf and 6 < color_distance(cf, self.bg) < 140 and contrast_ratio(self.text, cf) >= 7:
             return cf
         return mix(self.bg, self.accent, 0.08) if not self.dark else mix(self.bg, "FFFFFF", 0.10)
 
     def series(self, i: int) -> str:
-        """i-th series colour: the template's chart palette without colours that vanish on
-        this slide's background or duplicate an earlier series; extra series get shades
-        pulled towards the text colour, so they stay visible."""
+        """Цвет i-го ряда: палитра диаграмм шаблона без цветов, которые теряются на фоне этого слайда или
+        повторяют предыдущий ряд; дополнительные ряды получают оттенки, сдвинутые к цвету текста, чтобы
+        оставаться видимыми.
+        """
         pool: list[str] = []
         for c in self.tokens.chart_colors or []:
             if contrast_ratio(c, self.bg) >= 1.5 and all(color_distance(c, p) > 100 for p in pool):
@@ -101,37 +108,41 @@ class Style:
 
     @property
     def heading_font(self) -> str:
+        """Шрифт заголовков шаблона."""
         return self.tokens.heading_font
 
     @property
     def body_font(self) -> str:
+        """Основной шрифт шаблона."""
         return self.tokens.body_font
 
     def size(self, role: str) -> float:
+        """Кегль роли со шкалы шаблона."""
         ts = self.tokens.type_scale
         return {"title": ts.title, "subtitle": ts.subtitle, "body": ts.body, "caption": ts.caption, "number": ts.number}[role]
 
 
 def _rgb(h: str) -> RGBColor:
+    """Цвет python-pptx из hex."""
     return RGBColor.from_string(h)
 
 
 # ----------------------------------------------------------------------------
-# Primitives
+# Примитивы
 # ----------------------------------------------------------------------------
 def text_size(paragraphs: list[str], box: Box, st: Style, *, role: str = "body", bold: bool = False,
               size: float | None = None, bullets: bool = False, font: str | None = None) -> float:
-    """Largest size on the template scale (down to a readable floor) at which the text fits the box."""
+    """Наибольший кегль по шкале шаблона (до читаемого минимума), при котором текст помещается в рамку."""
     size = size or st.size(role)
     font = font or (st.heading_font if role in ("title", "subtitle", "number") else st.body_font)
     allowed = st.tokens.type_scale.sizes
     w = box.w - (Emu(228600) if bullets else 0)
     fitted = fit_font_size(paragraphs, font, size, w, box.h, bold, 0.7, allowed)
-    if not fitted:  # keep shrinking along the scale down to a readable floor
+    if not fitted:  # продолжаем уменьшать по шкале вниз до читаемого минимума
         floor = max(8.0, min(st.size("caption"), size))
         fitted = fit_font_size(paragraphs, font, size, w, box.h, bold, floor / size, allowed + [floor])
     size = fitted or max(8.0, min(st.size("caption"), size * 0.6))
-    # a word wider than the box would be broken in the middle by the renderer: smaller type for it
+    # слово шире рамки рендерер разорвал бы посередине: для него кегль меньше
     word, room = measure(paragraphs, font, size, w, bold).longest_word_emu, w - 2 * DEFAULT_INSET_LR
     if word > room:
         size = max(9.0, snap_down(int(size * room / word * 2) / 2, allowed, 0.85))
@@ -141,6 +152,7 @@ def text_size(paragraphs: list[str], box: Box, st: Style, *, role: str = "body",
 def add_text(slide, box: Box, paragraphs: list[str], st: Style, *, role: str = "body", color: str | None = None,
              bold: bool = False, align: str = "left", anchor: str = "top", size: float | None = None,
              bullets: bool = False, font: str | None = None, fit: bool = True, name: str = "Text"):
+    """Текстовый блок в токенах шаблона с подбором кегля под рамку."""
     font = font or (st.heading_font if role in ("title", "subtitle", "number") else st.body_font)
     size = text_size(paragraphs, box, st, role=role, bold=bold, size=size, bullets=bullets, font=font) if fit else (size or st.size(role))
     tb = slide.shapes.add_textbox(Emu(box.x), Emu(box.y), Emu(box.w), Emu(box.h))
@@ -172,6 +184,7 @@ def add_text(slide, box: Box, paragraphs: list[str], st: Style, *, role: str = "
 
 
 def add_rect(slide, box: Box, fill: str | None, *, rounded: bool = True, line: str | None = None, name: str = "Card"):
+    """Карточка (прямоугольник, по умолчанию скруглённый)."""
     shp = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE if rounded else MSO_SHAPE.RECTANGLE,
                                  Emu(box.x), Emu(box.y), Emu(box.w), Emu(box.h))
     shp.name = name
@@ -197,6 +210,7 @@ def add_rect(slide, box: Box, fill: str | None, *, rounded: bool = True, line: s
 
 
 def add_circle(slide, box: Box, fill: str, text: str, st: Style, text_color: str | None = None, name: str = "Marker"):
+    """Круглый маркер с текстом (номер шага)."""
     shp = slide.shapes.add_shape(MSO_SHAPE.OVAL, Emu(box.x), Emu(box.y), Emu(box.w), Emu(box.h))
     shp.name = name
     shp.fill.solid()
@@ -218,6 +232,7 @@ def add_circle(slide, box: Box, fill: str, text: str, st: Style, text_color: str
 
 
 def add_line(slide, x1: int, y1: int, x2: int, y2: int, color: str, width_pt: float = 1.5, name: str = "Connector"):
+    """Линия-соединитель."""
     ln = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Emu(x1), Emu(y1), Emu(x2), Emu(y2))
     ln.name = name
     ln.line.color.rgb = _rgb(color)
@@ -226,6 +241,7 @@ def add_line(slide, x1: int, y1: int, x2: int, y2: int, color: str, width_pt: fl
 
 
 def add_picture(slide, box: Box, path: str, name: str = "Picture"):
+    """Картинка, вписанная в рамку с обрезкой по центру."""
     from PIL import Image
 
     with Image.open(path) as im:
@@ -244,7 +260,7 @@ def add_picture(slide, box: Box, path: str, name: str = "Picture"):
 
 
 # ----------------------------------------------------------------------------
-# Composite visuals
+# Составные визуализации
 # ----------------------------------------------------------------------------
 def draw_chart(slide, box: Box, spec: ChartSpec, st: Style):
     kind = {
@@ -256,13 +272,13 @@ def draw_chart(slide, box: Box, spec: ChartSpec, st: Style):
     }[spec.type]
     data = CategoryChartData()
     data.categories = spec.categories
-    series = spec.series[:5]  # audit: <= 5 series
+    series = spec.series[:5]  # аудит: не больше 5 рядов
     for s in series:
         data.add_series(s.name, [float(v) for v in s.values])
     gf = slide.shapes.add_chart(kind, Emu(box.x), Emu(box.y), Emu(box.w), Emu(box.h), data)
     gf.name = "Chart"
     chart = gf.chart
-    chart.has_title = False  # the slide title already states the takeaway
+    chart.has_title = False  # заголовок слайда уже формулирует вывод
     chart.font.name = st.body_font
     chart.font.size = Pt(max(st.size("caption"), min(st.size("body"), 14)))
     chart.font.color.rgb = _rgb(st.muted)
@@ -335,10 +351,11 @@ CELL_INSET_LR, CELL_INSET_TB = int(0.08 * 914400), int(0.03 * 914400)
 
 
 def table_rows(cols: list[str], rows: list[list[str]], widths: list[int], max_h: int, st: Style) -> tuple[float, list[int]]:
-    """Cell size and row heights: the largest size on the template scale (body down to the
-    caption floor) at which every row, wrapped in its column width, fits the box. Rows get their
-    measured heights, so the saved table is as tall as renderers draw it (a row grows to fit
-    its text); spare height is spread evenly up to comfortable rows."""
+    """Кегль ячеек и высоты строк: наибольший кегль по шкале шаблона (для основного текста — до минимума
+    подписей), при котором каждая строка с переносами по ширине колонки помещается в рамку. Строки получают
+    измеренную высоту, поэтому сохранённая таблица такой же высоты, как её рисуют рендереры (строка растёт
+    под текст); лишняя высота равномерно распределяется до комфортной.
+    """
     base = min(st.size("body"), 16)
     floor = min(max(st.size("caption"), 10.0), base)
     sizes = sorted({s for s in st.tokens.type_scale.sizes if floor <= s <= base} | {base, floor}, reverse=True)
@@ -358,11 +375,11 @@ def table_rows(cols: list[str], rows: list[list[str]], widths: list[int], max_h:
 
 
 def draw_table(slide, box: Box, spec: TableSpec, st: Style):
-    rows = spec.rows[: TABLE_MAX_ROWS - 1]  # audit: header + 9 rows, <= 5 columns
+    rows = spec.rows[: TABLE_MAX_ROWS - 1]  # аудит: шапка + 9 строк, не больше 5 колонок
     cols = spec.columns[:TABLE_MAX_COLS]
     rows = [r[: len(cols)] + [""] * (len(cols) - len(r[: len(cols)])) for r in rows]
     n_r, n_c = len(rows) + 1, len(cols)
-    # first column wider when it holds labels
+    # первая колонка шире, если в ней подписи
     lens = [max([len(str(cols[c]))] + [len(str(r[c])) for r in rows]) for c in range(n_c)]
     total = sum(max(l, 4) for l in lens)
     widths = [int(box.w * max(l, 4) / total) for l in lens]
@@ -407,6 +424,7 @@ def draw_table(slide, box: Box, spec: TableSpec, st: Style):
 
 
 def _is_num(s: str) -> bool:
+    """Строка — число (допускает знак, пробелы и единицу)."""
     t = s.replace(" ", "").replace(" ", "").replace(",", ".").rstrip("%₽$€").lstrip("+-−~≈<>")
     try:
         float(t)
@@ -416,12 +434,14 @@ def _is_num(s: str) -> bool:
 
 
 def _columns(box: Box, n: int, gap_ratio: float = 0.04) -> list[Box]:
+    """Делит рамку на n колонок с промежутками."""
     gap = int(box.w * gap_ratio)
     w = int((box.w - gap * (n - 1)) / n)
     return [Box(x=box.x + i * (w + gap), y=box.y, w=w, h=box.h) for i in range(n)]
 
 
 def _grid(box: Box, n: int) -> list[Box]:
+    """Сетка рамок для n элементов (до 4 — в один ряд)."""
     if n <= 4:
         return _columns(box, n)
     cols = 3 if n in (5, 6, 9) else 4
@@ -433,6 +453,7 @@ def _grid(box: Box, n: int) -> list[Box]:
 
 
 def draw_kpis(slide, box: Box, items: list[Item], st: Style):
+    """Плитки KPI: крупное значение и подпись."""
     items = items[:4]
     cells = _columns(box, len(items), 0.05)
     num_size = max(st.size("number"), st.size("title") * 1.8)
@@ -452,7 +473,7 @@ def draw_kpis(slide, box: Box, items: list[Item], st: Style):
 
 
 def draw_process(slide, box: Box, items: list[Item], st: Style, numbered: bool = True):
-    """Horizontal process / timeline: markers on a line + title/text under each."""
+    """Горизонтальный процесс / таймлайн: маркеры на линии + заголовок/текст под каждым."""
     items = items[:6]
     n = len(items)
     cells = _columns(box, n, 0.03)
@@ -475,13 +496,13 @@ def draw_process(slide, box: Box, items: list[Item], st: Style, numbered: bool =
 
 
 def draw_cards(slide, box: Box, items: list[Item], st: Style, icons: list[str | None] | None = None):
-    # a short point without a heading is the card's heading itself (small text alone in a tall card
-    # reads as an empty card)
+    # короткий пункт без заголовка сам становится заголовком карточки (мелкий текст один в высокой карточке
+    # выглядит пустой карточкой)
     items = [it.model_copy(update={"title": it.text, "text": ""}) if not it.title and it.text and len(it.text) <= 70 else it
              for it in items[:8]]
     cells = _grid(box, len(items))
     row = len(items) <= 4
-    # cards stay compact (not stretched to the full region) unless their text needs the room
+    # карточки остаются компактными (не растягиваются на всю область), если тексту не нужно больше места
     compact = min(cells[0].h, int(box.h * 0.62)) if row else cells[0].h
     pad = int(min(cells[0].w, compact) * 0.08)
     w, gap = cells[0].w - 2 * pad, int(pad * 0.4)
@@ -490,7 +511,9 @@ def draw_cards(slide, box: Box, items: list[Item], st: Style, icons: list[str | 
     allowed = st.tokens.type_scale.sizes
     start = min(st.size("subtitle"), st.size("body") * 1.3)
     icon_s = int(min(compact * 0.22, cells[0].w * 0.25, 914400 * 0.55))
-    parts = []  # per card, sized on the compact card: icon, value/heading offset, value height, heading, size, height
+    # для каждой карточки по компактной высоте: иконка, отступ значения/заголовка, высота значения, заголовок,
+    # кегль, высота
+    parts = []
     for i, it in enumerate(items):
         icon = icons[i] if icons and i < len(icons) else None
         top = pad + (icon_s + int(pad * 0.6) if icon else 0)
@@ -499,13 +522,14 @@ def draw_cards(slide, box: Box, items: list[Item], st: Style, icons: list[str | 
         rest = compact - top - vh - pad
         size = th = 0
         if it.text:
-            # the heading takes the lines it needs (at most 40% of the room), the text starts right below it
+            # заголовок занимает нужное число строк (не больше 40% места), текст начинается сразу под ним
             size = fit_font_size([head], st.heading_font, start, w, int(rest * 0.4), True, 0.6, allowed + [start]) \
                 or snap_down(start * 0.6, allowed)
             th = min(measure([head], st.heading_font, size, w, True).height_emu, int(rest * 0.4))
         parts.append((icon, top, vh, head, size, th))
-    # one text size for the whole row: the largest that fits every card at its tallest; a row of
-    # cards then grows from compact just as far as that text needs (no text outside its card)
+    # один кегль на весь ряд: наибольший, при котором текст помещается в каждую карточку максимальной высоты;
+    # затем ряд карточек растёт от компактного ровно настолько, насколько нужно тексту (текст не выходит из
+    # карточки)
     body = min((text_size([it.text], Box(x=0, y=0, w=w, h=max(c.h - pad - top - vh - th - gap, 1)), on_card)
                 for it, c, (_, top, vh, _, _, th) in zip(items, cells, parts) if it.text), default=st.size("body"))
     if row:
@@ -534,6 +558,7 @@ def draw_cards(slide, box: Box, items: list[Item], st: Style, icons: list[str | 
 
 
 def draw_quote(slide, box: Box, quote: str, author: str, st: Style):
+    """Цитата с крупной кавычкой и автором."""
     mark_h = int(box.h * 0.22)
     add_text(slide, Box(x=box.x, y=box.y, w=int(box.w * 0.2), h=mark_h), ["«"], st, role="number", color=st.accent_text,
              bold=True, size=min(st.size("number") * 1.4, mark_h / 12700 / 1.3), fit=False, name="Quote mark")
@@ -546,7 +571,9 @@ def draw_quote(slide, box: Box, quote: str, author: str, st: Style):
 
 
 def comfortable_size(paragraphs: list[str], st: Style, box: Box, bullets: bool = False, fill: float = 0.7) -> float:
-    """Largest template-scale size between body and ~1.7x body that fills <= `fill` of the box."""
+    """Наибольший кегль шкалы шаблона между основным и ~1,7× основного, который заполняет не больше `fill`
+    рамки.
+    """
     body = st.size("body")
     cands = sorted({s for s in st.tokens.type_scale.sizes if body <= s <= body * 1.7} | {body}, reverse=True)
     w = box.w - (228600 if bullets else 0)
@@ -558,12 +585,14 @@ def comfortable_size(paragraphs: list[str], st: Style, box: Box, bullets: bool =
 
 
 def draw_bullets(slide, box: Box, bullets: list[str], st: Style, max_bullets: int = 6):
+    """Список пунктов комфортным кеглем."""
     bullets = [b for b in bullets if b.strip()][:max_bullets]
     size = comfortable_size(bullets, st, box, bullets=True)
     return add_text(slide, box, bullets, st, role="body", bullets=True, size=size, name="Bullets")
 
 
 def draw_image_text(slide, box: Box, image: str | None, paragraphs: list[str], st: Style, image_left: bool = False):
+    """Картинка и текст в две колонки."""
     cols = _columns(box, 2, 0.05)
     img_box, txt_box = (cols[0], cols[1]) if image_left else (cols[1], cols[0])
     if image:

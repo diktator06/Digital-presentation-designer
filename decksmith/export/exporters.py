@@ -1,8 +1,8 @@
-"""Export layer: .pptx (native objects, produced by the builder) -> .pdf and .html.
+"""Слой экспорта: .pptx (нативные объекты, создаёт сборщик) -> .pdf и .html.
 
-HTML is a single self-contained file: every slide is a vector SVG converted
-from the PDF (identical rendering), plus a hidden text layer for search and
-accessibility, keyboard navigation and an overview grid.
+HTML — один самодостаточный файл: каждый слайд — векторный SVG, полученный
+из PDF (идентичный рендер), плюс скрытый текстовый слой для поиска и
+доступности, навигация с клавиатуры и сетка обзора.
 """
 from __future__ import annotations
 
@@ -43,6 +43,7 @@ show((parseInt(location.hash.slice(1))||1)-1);
 
 
 def slide_texts(pptx: str | Path) -> list[str]:
+    """Тексты слайдов колоды (для скрытого текстового слоя HTML)."""
     out = []
     for s in Presentation(str(pptx)).slides:
         parts = []
@@ -56,6 +57,7 @@ def slide_texts(pptx: str | Path) -> list[str]:
 
 
 def to_html(pdf: str | Path, pptx: str | Path, out: str | Path, title: str, accent: str = "3366CC", lang: str = "ru") -> Path:
+    """Самодостаточный HTML: слайды векторным SVG из PDF + текстовый слой, навигация и обзор."""
     texts = slide_texts(pptx)
     blocks = []
     with pymupdf.open(pdf) as doc:

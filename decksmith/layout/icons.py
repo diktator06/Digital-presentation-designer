@@ -1,7 +1,7 @@
-"""Pictograms: Lucide icon set (ISC) recoloured to the template accent.
+"""Пиктограммы: набор иконок Lucide (ISC), перекрашенный в акцент шаблона.
 
-The LLM chooses an icon keyword per item; `resolve_icon` maps RU/EN keywords
-to icon files deterministically (exact name -> synonyms -> substring).
+LLM выбирает ключевое слово иконки для каждого элемента; `resolve_icon` детерминированно
+сопоставляет ключевые слова RU/EN файлам иконок (точное имя -> синонимы -> подстрока).
 """
 from __future__ import annotations
 
@@ -42,15 +42,18 @@ DEFAULT_ICON = "circle-check"
 
 
 def icons_dir() -> Path:
+    """Каталог иконок."""
     return settings().assets_dir / "icons"
 
 
 @lru_cache(maxsize=1)
 def icon_names() -> list[str]:
+    """Имена доступных иконок."""
     return sorted(p.stem for p in icons_dir().glob("*.svg"))
 
 
 def resolve_icon(keyword: str | None) -> str:
+    """Файл иконки по ключевому слову (точное имя -> синонимы -> подстрока)."""
     names = set(icon_names())
     if not keyword:
         return DEFAULT_ICON
@@ -69,7 +72,7 @@ def resolve_icon(keyword: str | None) -> str:
 
 
 def render_icon(name: str, color_hex: str, size_px: int = 256, stroke: float = 2.0) -> str:
-    """Rasterise an SVG icon in the given colour (transparent PNG), cached."""
+    """Растеризует SVG-иконку в заданном цвете (прозрачный PNG), с кэшем."""
     out_dir = settings().workspace / "icons"
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / f"{name}_{color_hex}_{size_px}.png"
@@ -92,4 +95,5 @@ def render_icon(name: str, color_hex: str, size_px: int = 256, stroke: float = 2
 
 
 def icon_for(keyword: str | None, color_hex: str) -> str:
+    """PNG иконки по ключевому слову в цвете шаблона."""
     return render_icon(resolve_icon(keyword), color_hex)

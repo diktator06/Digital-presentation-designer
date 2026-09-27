@@ -1,8 +1,8 @@
-"""Deterministic audit checks (same slide -> same result).
+"""Детерминированные проверки аудита (тот же слайд -> тот же результат).
 
-They rely only on what is in the file (coordinates, sizes, color codes, layout
-references), on the template profile (rules) and on the rendered PNG (pixels).
-Each check is registered with an id, category and the fixer that can repair it.
+Опираются только на то, что есть в файле (координаты, размеры, коды цветов, ссылки
+на макеты), на профиль шаблона (правила) и на отрендеренный PNG (пиксели).
+Каждая проверка регистрируется с id, категорией и фиксером, который может её исправить.
 """
 from __future__ import annotations
 
@@ -35,7 +35,9 @@ COVER_KINDS = {"title", "section", "thanks", "quote", "contacts"}
 
 
 def check(cid: str, category: str, title: str, fixer: str | None = None):
+    """Декоратор регистрации проверки: id, категория, название и фиксер."""
     def deco(fn):
+        """Регистрирует функцию проверки в каталоге."""
         CHECKS[cid] = CheckMeta(cid, category, title, fixer, fn)
         return fn
     return deco
@@ -45,6 +47,7 @@ _counter = [0]
 
 
 def issue(cid: str, slide: int, message: str, *, boxes=(), shape_ids=(), severity=Severity.warning, data=None) -> AuditIssue:
+    """Создаёт замечание аудита с метаданными проверки."""
     meta = CHECKS[cid]
     _counter[0] += 1
     return AuditIssue(
@@ -55,16 +58,19 @@ def issue(cid: str, slide: int, message: str, *, boxes=(), shape_ids=(), severit
 
 
 def _tol(ctx: AuditContext, frac: float = 0.004) -> int:
+    """Допуск в EMU как доля ширины слайда."""
     return int(ctx.profile.tokens.slide_w * frac)
 
 
 def _same_box(a: Box, b: Box, tol: int = 12700 * 2) -> bool:
+    """Рамки совпадают с точностью до допуска."""
     return abs(a.x - b.x) <= tol and abs(a.y - b.y) <= tol and abs(a.w - b.w) <= tol and abs(a.h - b.h) <= tol
 
 
 def inherited_geometry(ctx: AuditContext, sf: SlideFacts, e: Element) -> bool:
-    """True when the element sits exactly where the template put it (layout placeholder
-    geometry or the example slide it was cloned from): a property of the template itself."""
+    """True, если элемент стоит ровно там, где его поставил шаблон (геометрия плейсхолдера макета или слайд-
+    пример, из которого он клонирован): это свойство самого шаблона.
+    """
     tpl = ctx.template_element(sf.index, e.shape_id)
     if tpl is not None and _same_box(tpl.box, e.box):
         return True
@@ -80,9 +86,10 @@ def inherited_geometry(ctx: AuditContext, sf: SlideFacts, e: Element) -> bool:
     return False
 
 
-# ============================================================================ layout
+# ============================================================================ вёрстка
 @check("layout.out_of_bounds", "layout", "Элемент вышел за границы слайда", fixer="move_inside")
 def out_of_bounds(ctx):
+    """Элемент не выходит за границы слайда."""
     t = ctx.profile.tokens
     out, tol = [], _tol(ctx)
     for sf in ctx.slides:
@@ -98,23 +105,26 @@ def out_of_bounds(ctx):
 
 
 def _lines_collide_in_template(ctx: AuditContext, sf: SlideFacts, a: Element, b: Element) -> bool:
-    """Frames that overlap in the example are design, colliding lines are not: a one-line title of
-    the example clears the subtitle under it, a two-line title of ours does not."""
+    """Рамки, перекрывающиеся в примере, — дизайн, сталкивающиеся строки — нет: однострочный заголовок примера
+    не задевает подзаголовок под ним, а наш двухстрочный — задевает.
+    """
     ta, tb = ctx.template_element(sf.index, a.shape_id), ctx.template_element(sf.index, b.shape_id)
     if ta is None or tb is None or not (ta.kind == "text" and tb.kind == "text" and ta.style and tb.style):
-        return True  # no example text to compare with (layout placeholders): trust the geometry
+        return True  # нет текста примера для сравнения (плейсхолдеры макета): доверяем геометрии
     ga, gb = sf.glyph_box(ta), sf.glyph_box(tb)
     return ga.intersection(gb) > 0.08 * (min(ga.area, gb.area) or 1)
 
 
 @check("layout.overlap", "layout", "Два блока наложились друг на друга", fixer="shrink_text")
 def overlap(ctx):
-    """Colliding text lines / objects are an error; frames that only overlap (lines apart) are a
-    layout-hygiene warning. Both are template design when the frames sit exactly where the
-    template example put them and the text did not grow them."""
+    """Сталкивающиеся строки текста / объекты — ошибка; рамки, которые лишь перекрываются (строки разнесены),
+    — предупреждение о гигиене вёрстки. И то и другое — дизайн шаблона, если рамки стоят ровно там, где их
+    поставил пример шаблона, и текст их не увеличил.
+    """
     out = []
     for sf in ctx.slides:
-        # text is compared where its lines are (a card-sized frame may contain another by design)
+        # текст сравнивается там, где стоят его строки (рамка размером с карточку по замыслу может содержать
+        # другую)
         blocks = [(e, sf.glyph_box(e) if e.kind == "text" else sf.effective_box(e)) for e in sf.content]
         for i in range(len(blocks)):
             for j in range(i + 1, len(blocks)):
@@ -129,7 +139,8 @@ def overlap(ctx):
                     inh = frames and inherited and not grown and _lines_collide_in_template(ctx, sf, a, b)
                     sev, what = (Severity.info if inh else Severity.error), " (так в шаблоне)" if inh else ""
                 elif inherited or a.box.contains(b.box, tol=_tol(ctx)) or b.box.contains(a.box, tol=_tol(ctx)):
-                    continue  # frames nest (template design, or a frame grown inside its card), the lines are apart
+                    # рамки вложены (дизайн шаблона или рамка, выросшая внутри карточки), строки разнесены
+                    continue
                 else:
                     sev, what = Severity.warning, " (рамки; строки не пересекаются)"
                 inter = (ga if lines else a.box).intersection(gb if lines else b.box)
@@ -144,8 +155,9 @@ def overlap(ctx):
 
 @check("layout.text_overflow", "layout", "Текст не поместился в свою рамку", fixer="grow_frame")
 def text_overflow(ctx):
-    """The fixer first resizes the frame inside its block (allowed by the organisers'
-    clarification), and shrinks the type only when the block has no room left."""
+    """Фиксер сначала меняет размер рамки внутри её блока (разрешено уточнением организаторов) и уменьшает
+    кегль, только если в блоке не осталось места.
+    """
     t = ctx.profile.tokens
     area, tol = t.slide_w * t.slide_h, _tol(ctx)
     out = []
@@ -154,12 +166,13 @@ def text_overflow(ctx):
         for e in sf.texts:
             if not e.style or e.autofit:
                 continue
-            # heights, not line counts: paragraphs may differ in size and carry spacing
+            # высоты, а не число строк: абзацы могут различаться кеглем и иметь интервалы
             need = sf.text_height_needed(e)
             if need > e.box.h + 0.25 * (e.style.size or 14) * 1.2 * 12700 and not _leaves_block(sf, e, plates, tol):
                 need_lines, fit_lines = sf.lines(e)
                 tpl = ctx.template_element(sf.index, e.shape_id)
-                inherited = tpl is not None and tpl.text == e.text and _same_box(tpl.box, e.box)  # the example's own text
+                # собственный текст примера
+                inherited = tpl is not None and tpl.text == e.text and _same_box(tpl.box, e.box)
                 out.append(issue("layout.text_overflow", sf.index,
                                  f"Текст «{e.text[:40]}» не помещается: нужно {need / 12700:.0f} pt по высоте, в рамке {e.box.h / 12700:.0f} pt"
                                  + (" (так в шаблоне)" if inherited else ""),
@@ -170,13 +183,15 @@ def text_overflow(ctx):
 
 
 def _plates(sf: SlideFacts, area: int) -> list[Element]:
-    """Visible surfaces that can frame text: filled/outlined shapes and pictures (not icons)."""
+    """Видимые поверхности, которые могут обрамлять текст: фигуры с заливкой/контуром и картинки (не иконки).
+    """
     return [e for e in sf.elements if not e.brand and 0 < e.box.area < 0.85 * area and
             ((e.kind == "decor" and not e.graphic and (e.fill_hex or e.has_line)) or (e.kind == "picture" and not e.is_icon))]
 
 
 def text_block(sf: SlideFacts, e: Element, plates: list[Element], tol: int) -> Element | None:
-    """The block a text belongs to: the smallest plate spanning the frame's width and holding its top."""
+    """Блок, которому принадлежит текст: наименьшая подложка, перекрывающая ширину рамки и содержащая её верх.
+    """
     best = None
     for p in plates:
         b = p.box
@@ -186,7 +201,7 @@ def text_block(sf: SlideFacts, e: Element, plates: list[Element], tol: int) -> E
 
 
 def _leaves_block(sf: SlideFacts, e: Element, plates: list[Element], tol: int) -> bool:
-    """The text spills out of its block: `layout.block_overflow` reports it (one finding per defect)."""
+    """Текст вытекает из своего блока: об этом сообщает `layout.block_overflow` (одно замечание на дефект)."""
     block = text_block(sf, e, plates, tol)
     if block is None:
         return False
@@ -196,9 +211,10 @@ def _leaves_block(sf: SlideFacts, e: Element, plates: list[Element], tol: int) -
 
 @check("layout.block_overflow", "layout", "Текст вышел за пределы своего блока (плашки, карточки)", fixer="shrink_text")
 def block_overflow(ctx):
-    """Organisers' clarification of «текст не поместился в свою рамку»: the frame may grow inside
-    its block, the text must stay within the block. Lines are placed by the frame's anchor
-    (auto-fit frames grow downwards). The template's own example spilling the same way is design."""
+    """Уточнение организаторов к «текст не поместился в свою рамку»: рамка может расти внутри своего блока,
+    текст должен оставаться в блоке. Строки размещаются по привязке рамки (рамки с автоподбором растут
+    вниз). Если собственный пример шаблона вытекает так же — это дизайн.
+    """
     t = ctx.profile.tokens
     area, tol = t.slide_w * t.slide_h, _tol(ctx)
     out = []
@@ -233,7 +249,7 @@ def text_clipped(ctx):
         for e in sf.texts:
             eb = sf.effective_box(e)
             if eb.b > t.slide_h + _tol(ctx) or eb.r > t.slide_w + _tol(ctx):
-                # the frame itself sits across the edge in the template and our text did not grow it
+                # сама рамка в шаблоне стоит поперёк края, и наш текст её не увеличил
                 inh = inherited_geometry(ctx, sf, e) and (e.box.b > t.slide_h or e.box.r > t.slide_w) and eb.area <= e.box.area * 1.05
                 out.append(issue("layout.text_clipped", sf.index,
                                  f"Текст «{e.text[:40]}» уходит за край слайда" + (" (рамка так стоит в шаблоне)" if inh else ""),
@@ -244,7 +260,7 @@ def text_clipped(ctx):
 
 @check("layout.misaligned", "layout", "Блоки не выровнены по направляющим", fixer="snap_align")
 def misaligned(ctx):
-    """Left edges that are almost-but-not-quite equal (0.2%..1.5% of width) are misalignments."""
+    """Левые края, которые почти, но не совсем равны (0,2%..1,5% ширины), — нарушение выравнивания."""
     t = ctx.profile.tokens
     lo, hi = 0.002 * t.slide_w, 0.015 * t.slide_w
     out = []
@@ -265,6 +281,7 @@ def misaligned(ctx):
 
 @check("layout.margins", "layout", "Контент заходит в поля у краёв", fixer="move_inside")
 def margins(ctx):
+    """Контент не заходит в поля у краёв."""
     t = ctx.profile.tokens
     m = t.margins
     out = []
@@ -280,6 +297,7 @@ def margins(ctx):
 
 @check("layout.image_distorted", "layout", "Картинка растянута, пропорции нарушены", fixer="fix_aspect")
 def image_distorted(ctx):
+    """Изображения не растянуты и не сжаты непропорционально."""
     out = []
     for sf in ctx.slides:
         for sh in sf.slide.shapes:
@@ -305,8 +323,9 @@ def image_distorted(ctx):
     return out
 
 
-# ============================================================================ template
+# ============================================================================ шаблон
 def _allowed_fonts(ctx) -> set[str]:
+    """Шрифты, которые использует шаблон."""
     fams = {f.family.lower() for f in ctx.profile.tokens.fonts}
     fams |= {ctx.profile.tokens.heading_font.lower(), ctx.profile.tokens.body_font.lower()}
     return fams
@@ -314,6 +333,7 @@ def _allowed_fonts(ctx) -> set[str]:
 
 @check("template.font", "template", "Шрифт не из шаблона или гарнитур больше двух", fixer="set_template_font")
 def fonts(ctx):
+    """Шрифты только из шаблона, гарнитур не больше двух."""
     allowed = _allowed_fonts(ctx)
     out = []
     for sf in ctx.slides:
@@ -331,6 +351,7 @@ def fonts(ctx):
 
 @check("template.type_scale", "template", "Кегль не из типографической шкалы шаблона", fixer="snap_size")
 def type_scale(ctx):
+    """Кегли текста — со шкалы шаблона."""
     scale = ctx.profile.tokens.type_scale.sizes
     out = []
     if not scale:
@@ -347,6 +368,7 @@ def type_scale(ctx):
 
 
 def _sat_light(h: str):
+    """Оттенок, светлота и насыщенность цвета."""
     r, g, b = (c / 255 for c in hex_to_rgb(h))
     hh, l, s = colorsys.rgb_to_hls(r, g, b)
     return hh, l, s
@@ -358,8 +380,8 @@ def color_in_palette(ctx, hex_: str) -> bool:
         return True
     h, l, s = _sat_light(hex_)
     if s < 0.12 or l > 0.93 or l < 0.07:
-        return True  # neutrals / near-white / near-black
-    for p in pal:  # tint or shade of a palette hue
+        return True  # нейтральные / почти белые / почти чёрные
+    for p in pal:  # светлее или темнее оттенка из палитры
         ph, pl, ps = _sat_light(p)
         if ps > 0.2 and min(abs(ph - h), 1 - abs(ph - h)) < 0.04:
             return True
@@ -368,6 +390,7 @@ def color_in_palette(ctx, hex_: str) -> bool:
 
 @check("template.palette", "template", "Цвет не из палитры шаблона", fixer="snap_color")
 def palette(ctx):
+    """Цвета текста и заливок — из палитры шаблона (или её оттенки)."""
     out = []
     for sf in ctx.slides:
         for e in sf.elements:
@@ -385,6 +408,7 @@ def palette(ctx):
 
 @check("template.layout", "template", "Слайд собран не на макете из шаблона")
 def layout_from_template(ctx):
+    """Каждый слайд построен на макете из шаблона."""
     names = {l.name for l in ctx.profile.layouts}
     return [issue("template.layout", sf.index, f"Макет «{sf.layout_name}» отсутствует в шаблоне", severity=Severity.error)
             for sf in ctx.slides if sf.layout_name not in names]
@@ -396,7 +420,7 @@ def brand_zone(ctx):
     brand = [b for b in ctx.profile.brand_elements if b.kind in ("logo", "footer", "page_number")]
     for sf in ctx.slides:
         layout_idx = next((l.index for l in ctx.profile.layouts if l.name == sf.layout_name), None)
-        # footer / page-number placeholders of a layout are drawn only if the slide carries them
+        # плейсхолдеры колонтитула / номера страницы макета рисуются, только если они есть на слайде
         on_slide = {e.placeholder for e in sf.elements if e.placeholder in ("FOOTER", "SLIDE_NUMBER", "DATE")}
         mine = [b for b in brand if (f"layout:{layout_idx}" in b.source or "master" in b.source)
                 and (b.kind == "logo" or {"footer": "FOOTER", "page_number": "SLIDE_NUMBER"}[b.kind] in on_slide)]
@@ -430,8 +454,8 @@ def contrast(ctx):
             large = (e.style.size or 0) >= 18 or ((e.style.size or 0) >= 14 and e.style.bold)
             need = 3.0 if large else 4.5
             if cr < need and color_distance(e.style.color, bg) > 1:
-                # the same colour on the same shape in the template example, or a placeholder whose
-                # colour comes from the layout/master (we never set it) = a rule of the template itself
+                # тот же цвет у той же фигуры в примере шаблона или плейсхолдер, чей
+                # цвет приходит из макета/мастера (мы его никогда не задаём) = правило самого шаблона
                 tpl = ctx.template_element(sf.index, e.shape_id)
                 inherited = bool(tpl and tpl.style and tpl.style.color == e.style.color) or e.style.color in _template_text_colors(ctx) \
                     or (e.placeholder is not None and not _explicit_run_color(sf.slide, e.shape_id))
@@ -443,6 +467,7 @@ def contrast(ctx):
 
 
 def _explicit_run_color(slide, shape_id: int) -> bool:
+    """Цвет текста задан явно в самом фрагменте (а не унаследован от шаблона)."""
     from decksmith.layout.pptx_ops import shape_by_id
 
     sh = shape_by_id(slide, shape_id)
@@ -453,16 +478,19 @@ def _explicit_run_color(slide, shape_id: int) -> bool:
 
 
 def _template_text_colors(ctx) -> set[str]:
+    """Цвета, которые шаблон использует для текста."""
     return {c.hex for c in ctx.profile.tokens.palette if "text" in c.roles}
 
 
-# ============================================================================ density
+# ============================================================================ плотность
 def _is_list(e: Element) -> bool:
+    """Элемент — список (не меньше двух абзацев)."""
     return len(e.paragraphs) >= 2
 
 
 @check("density.bullets", "density", "Больше 6 буллетов на слайде", fixer="trim_bullets")
 def bullets(ctx):
+    """Не больше 6 пунктов в списке."""
     out = []
     for sf in ctx.slides:
         for e in sf.texts:
@@ -474,6 +502,7 @@ def bullets(ctx):
 
 @check("density.bullet_words", "density", "Буллет длиннее 15 слов", fixer="shorten_llm")
 def bullet_words(ctx):
+    """Пункт списка не длиннее 15 слов."""
     out = []
     for sf in ctx.slides:
         for e in sf.texts:
@@ -489,7 +518,7 @@ def bullet_words(ctx):
 
 @check("density.table", "density", "Таблица больше 10 строк или 5 колонок", fixer="trim_table")
 def table_size(ctx):
-    """TZ Appendix 1 names 7 rows; per the organisers' clarification tables up to 10 rows pass."""
+    """Приложение 1 ТЗ называет 7 строк; по уточнению организаторов проходят таблицы до 10 строк."""
     out = []
     for sf in ctx.slides:
         for e in sf.elements:
@@ -503,6 +532,7 @@ def table_size(ctx):
 
 @check("density.chart_series", "density", "Больше 5 серий на диаграмме")
 def chart_series(ctx):
+    """Не больше 5 серий на диаграмме."""
     out = []
     for sf in ctx.slides:
         for sh in sf.slide.shapes:
@@ -524,7 +554,7 @@ def fill(ctx):
             continue
         boxes = [sf.text_extent(e) for e in sf.content]
         boxes += [e.box for e in sf.elements if e.kind == "picture" and not e.is_icon and e.name in ("Illustration", "Picture")]
-        # union area on a coarse grid
+        # площадь объединения на грубой сетке
         g = 40
         cells = set()
         for b in boxes:
@@ -541,9 +571,10 @@ def fill(ctx):
     return out
 
 
-# ============================================================================ integrity
+# ============================================================================ целостность
 @check("integrity.open", "integrity", "Файл не открывается")
 def opens(ctx):
+    """Файл открывается и содержит слайды."""
     try:
         n = len(ctx.prs.slides)
     except Exception as e:
@@ -564,6 +595,7 @@ PLACEHOLDER_RE = re.compile(
 
 @check("integrity.placeholder_text", "integrity", "Остался текст-заглушка", fixer="remove_placeholder")
 def placeholder_text(ctx):
+    """На слайдах не осталось текста-подсказки шаблона."""
     out = []
     for sf in ctx.slides:
         for e in sf.texts:
@@ -577,6 +609,7 @@ def placeholder_text(ctx):
 
 @check("integrity.empty", "integrity", "Пустой слайд или слайд с одним заголовком")
 def empty(ctx):
+    """Нет пустых слайдов и слайдов с одним заголовком."""
     out = []
     for sf in ctx.slides:
         if sf.kind in COVER_KINDS:
@@ -590,6 +623,7 @@ def empty(ctx):
 
 @check("integrity.raster", "integrity", "Слайд оказался картинкой, а не редактируемыми объектами")
 def raster(ctx):
+    """Содержание не вставлено картинкой: текст, таблицы и диаграммы — нативные объекты."""
     t = ctx.profile.tokens
     out = []
     for sf in ctx.slides:
@@ -602,6 +636,7 @@ def raster(ctx):
 
 @check("integrity.chart_labels", "integrity", "У диаграммы нет подписей осей, единиц или легенды")
 def chart_labels(ctx):
+    """У диаграммы есть подписи осей, единиц или легенда."""
     out = []
     for sf in ctx.slides:
         for sh in sf.slide.shapes:
@@ -625,11 +660,13 @@ def chart_labels(ctx):
 
 
 def _words(sf: SlideFacts) -> set[str]:
+    """Значимые слова слайда (от 4 букв)."""
     return {w.lower() for e in sf.texts for w in re.findall(r"[a-zA-Zа-яА-ЯёЁ]{4,}", e.text)}
 
 
 @check("integrity.duplicate", "integrity", "Два слайда дублируют друг друга", fixer="drop_slide")
 def duplicate(ctx):
+    """Нет слайдов, почти целиком повторяющих друг друга."""
     out = []
     ws = [_words(sf) for sf in ctx.slides]
     for i in range(len(ws)):
@@ -644,10 +681,12 @@ def duplicate(ctx):
 
 
 def _norm_words(s: str) -> list[str]:
+    """Слова и числа строки в нижнем регистре."""
     return re.findall(r"[a-zA-Zа-яА-ЯёЁ0-9]+", s.lower())
 
 
 def _present(fragment: str, haystack_words: set[str], min_hit: float = 0.6) -> bool:
+    """Фрагмент присутствует на слайде: совпадает не меньше `min_hit` его значимых слов."""
     words = [w for w in _norm_words(fragment) if len(w) > 2 or any(ch.isdigit() for ch in w)][:6]
     if not words:
         return True
@@ -655,6 +694,7 @@ def _present(fragment: str, haystack_words: set[str], min_hit: float = 0.6) -> b
 
 
 def _slide_words(sf) -> set[str]:
+    """Все слова текстов слайда."""
     words = set()
     for e in sf.texts:
         words |= set(_norm_words(e.text))
@@ -674,6 +714,7 @@ def _slide_words(sf) -> set[str]:
 
 @check("integrity.title_missing", "integrity", "На слайде нет заголовка из плана")
 def title_missing(ctx):
+    """Заголовок из плана виден на слайде."""
     if not ctx.plan:
         return []
     out = []
@@ -689,8 +730,9 @@ def title_missing(ctx):
 
 @check("integrity.content_lost", "integrity", "Часть контента плана не попала на слайд")
 def content_lost(ctx):
-    """Every bullet / item / table row of the plan, and the lead line of a divider or closing
-    slide, must be visible (silent drops are layout bugs)."""
+    """Каждый пункт / элемент / строка таблицы плана и вводная фраза разделителя или финального слайда должны
+    быть видны (молчаливые потери — ошибки вёрстки).
+    """
     if not ctx.plan:
         return []
     out = []
@@ -700,13 +742,13 @@ def content_lost(ctx):
         spec = ctx.plan.slides[sf.index]
         frags = list(spec.bullets[:6])
         frags += [it.title or it.text or it.value for it in spec.items[:8]]
-        frags += [it.value for it in spec.items[:8] if it.value and it.title]  # KPI values are the point
+        frags += [it.value for it in spec.items[:8] if it.value and it.title]  # значения KPI — суть слайда
         if spec.table:
             frags += [str(r[0]) for r in spec.table.rows[:TABLE_MAX_ROWS - 1] if r]
         if spec.chart:
             frags += spec.chart.categories[:8]
         if spec.intent.value in ("section", "thanks") and (spec.message or spec.subtitle):
-            frags.append(spec.message or spec.subtitle)  # a divider's lead line, a pitch's call to action
+            frags.append(spec.message or spec.subtitle)  # вводная фраза разделителя, призыв к действию в питче
         words = _slide_words(sf)
         missing = [f for f in frags if f and not _present(f, words)]
         if missing:
@@ -716,9 +758,10 @@ def content_lost(ctx):
     return out
 
 
-# ============================================================================ content (deterministic part)
+# ================================================================ содержание (детерминированная часть)
 @check("content.language", "content", "Вся колода на одном языке", fixer="fix_llm")
 def language(ctx):
+    """Вся колода на одном языке."""
     lang = ctx.plan.language if ctx.plan else "ru"
     out = []
     for sf in ctx.slides:
@@ -745,16 +788,16 @@ def numbers_sourced(ctx):
     for sf in ctx.slides:
         for e in sf.texts:
             if e.brand:
-                continue  # page numbers, dates, footers are not content
+                continue  # номера страниц, даты, колонтитулы — не содержание
             for m in NUM_RE.finditer(e.text):
                 raw = m.group(0).strip()
                 digits = re.sub(r"[^\d.]", "", normalize_number(raw))
                 if not digits or len(digits.replace(".", "")) < 2:
-                    continue  # step numbers 1..9
+                    continue  # номера шагов 1..9
                 if digits.lstrip("0") in {d.lstrip("0") for d in known_digits}:
                     continue
                 if re.fullmatch(r"(19|20)\d\d", digits):
-                    continue  # years are validated contextually
+                    continue  # годы проверяются контекстно
                 out.append(issue("content.numbers_sourced", sf.index, f"Число «{raw}» не найдено в материалах", boxes=[e.box],
                                  shape_ids=[e.shape_id], data={"number": raw}))
     return out
@@ -769,7 +812,7 @@ def run_rules(ctx: AuditContext, only: list[str] | None = None) -> tuple[list[Au
         try:
             issues += meta.fn(ctx)
             ran.append(cid)
-        except Exception as e:  # a broken check must not break the pipeline
+        except Exception as e:  # сломанная проверка не должна ломать пайплайн
             issues.append(AuditIssue(id=f"{cid}#err", check=cid, category=meta.category, slide=0,
                                      message=f"проверка упала: {e}", severity=Severity.info))
     return issues, ran

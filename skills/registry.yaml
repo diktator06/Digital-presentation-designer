@@ -1,6 +1,6 @@
-# Active versions of skills (prompts + model params) and agents (workflows).
-# To roll out a new prompt: add skills/<name>/v2.yaml, switch `active`, the run
-# manifest records name@version + sha256 of every file used.
+# Активные версии скиллов (промпты + параметры модели) и агентов (процессы).
+# Чтобы выкатить новый промпт: добавьте skills/<имя>/v2.yaml и переключите `active`;
+# манифест запуска записывает имя@версия + sha256 каждого использованного файла.
 skills:
   outline:          {active: v1}
   slide_writer:     {active: v2}

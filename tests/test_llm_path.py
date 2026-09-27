@@ -1,6 +1,7 @@
-"""The model path end-to-end against an in-process OpenAI-compatible emulator:
-skill rendering, request format (JSON mode, images for the VLM), schema validation,
-the JSON-repair round, visual-audit mapping and contextual fixes."""
+"""Путь через модель от начала до конца против эмулятора OpenAI-совместимого API в том же процессе:
+рендер скиллов, формат запросов (JSON-режим, картинки для VLM), проверка схемы,
+раунд исправления JSON, сопоставление визуального аудита и контекстные исправления.
+"""
 import asyncio
 from pathlib import Path
 
@@ -23,14 +24,16 @@ def test_plan_via_llm_with_repair(profiles):
     corpus = ingest([], "Сервис генерации презентаций: 10–15 слайдов, 5 минут, 3 варианта.")
 
     async def go():
+        """План через эмулятор модели."""
         async with LLMClient(CFG, transport=emu.transport()) as llm:
             return await make_plan(Brief(text="Сервис", n_slides=9), corpus, profiles["vk_tech"], llm, load_agent()), llm
 
     (plan, mode), llm = asyncio.run(go())
     assert mode == "llm"
     skills = [r["skill"] for r in emu.requests]
-    assert "outline@v1" in skills and "outline@v1:repair" in skills  # invalid schema -> one repair round
-    assert sum(s == "slide_writer@v2" for s in skills) >= 6  # writers in parallel, one per content slide
+    assert "outline@v1" in skills and "outline@v1:repair" in skills  # неверная схема -> один раунд исправления
+    # авторы текстов параллельно, по одному на содержательный слайд
+    assert sum(s == "slide_writer@v2" for s in skills) >= 6
     assert all(r["body"].get("response_format") == {"type": "json_object"} for r in emu.requests)
     intents = [s.intent.value for s in plan.slides]
     assert intents[0] == "title" and intents[-1] == "thanks"
@@ -40,6 +43,7 @@ def test_plan_via_llm_with_repair(profiles):
 
 
 def test_pipeline_with_model_path(profiles, monkeypatch, tmp_path):
+    """Весь пайплайн через путь модели (эмулятор): план, тексты, визуальный аудит."""
     from decksmith.content.ingest import ingest
     from decksmith.generation.planner import Brief
     from decksmith.pipeline import Pipeline
@@ -61,6 +65,7 @@ def test_pipeline_with_model_path(profiles, monkeypatch, tmp_path):
 
 
 def test_contextual_fix_via_fixer_skill(profiles, tmp_path):
+    """Контекстное исправление идёт через скилл `fixer`."""
     from pptx import Presentation
 
     from decksmith.audit.fixers import apply_fixes
@@ -74,6 +79,7 @@ def test_contextual_fix_via_fixer_skill(profiles, tmp_path):
                        message="Заголовок не содержит вывода", fixable=True, fix="fix_llm")
 
     async def go():
+        """Исправление через эмулятор модели."""
         async with LLMClient(CFG, transport=emu.transport()) as llm:
             return await apply_fixes(src, [issue], prof, tmp_path / "fixed.pptx", llm)
 

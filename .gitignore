@@ -8,8 +8,8 @@ frontend/dist/
 .env
 .DS_Store
 *.egg-info/
-# organiser's dataset (distributed via the participant account, not redistributed here)
+# датасет организатора (выдаётся через личный кабинет участника, здесь не распространяется)
 data/templates/*.pptx
 data/content/*.pdf
-# local model / scratch
+# локальные модели / черновики
 config/local_*.yaml.bak

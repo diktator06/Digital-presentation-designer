@@ -1,7 +1,7 @@
-"""Deterministic pattern selection: DeckPlan x TemplateProfile x Variant -> decisions.
+"""Детерминированный выбор паттернов: DeckPlan × TemplateProfile × Variant -> решения.
 
-Every decision carries a rationale string, so the UI/defence can show *why* a
-given template slide was picked. Same inputs always give the same output.
+Каждое решение несёт строку-обоснование, чтобы UI/защита могли показать, *почему*
+выбран конкретный слайд шаблона. Одинаковые входные данные всегда дают одинаковый результат.
 """
 from __future__ import annotations
 
@@ -57,12 +57,14 @@ class Variant:
 
 @lru_cache(maxsize=4)
 def load_variants(path: str | None = None) -> dict[str, Variant]:
+    """Стратегии вариантов из config/variants.yaml."""
     p = Path(path) if path else ROOT / "config" / "variants.yaml"
     data = yaml.safe_load(p.read_text(encoding="utf-8"))
     return {k: Variant(name=k, **v) for k, v in data.items()}
 
 
 def spec_items_count(spec: SlideSpec) -> int:
+    """Число элементов, которые покажет слайд."""
     if spec.items:
         return len(spec.items)
     if spec.intent in ITEM_KINDS and spec.bullets:
@@ -71,6 +73,7 @@ def spec_items_count(spec: SlideSpec) -> int:
 
 
 def spec_chars(spec: SlideSpec) -> int:
+    """Объём текста слайда в символах."""
     n = len(spec.subtitle) + len(spec.message)
     n += sum(len(b) for b in spec.bullets)
     n += sum(len(i.title) + len(i.text) + len(i.value) for i in spec.items)
@@ -78,6 +81,7 @@ def spec_chars(spec: SlideSpec) -> int:
 
 
 def _removable(p: Pattern) -> bool:
+    """Лишние элементы повторителя можно удалить без дыр (ряд, колонка или сетка)."""
     return bool(p.repeaters) and p.repeaters[0].direction in ("row", "column", "grid")
 
 
@@ -91,7 +95,7 @@ class Candidate:
 
 
 def _row_length(p: Pattern) -> int:
-    """Items in the first row of a repeater laid out as a grid (0 for a single row or column)."""
+    """Число элементов в первой строке повторителя, разложенного сеткой (0 для одной строки или колонки)."""
     boxes = p.repeaters[0].item_boxes if p.repeaters else []
     if len(boxes) < 4:
         return 0
@@ -102,7 +106,9 @@ def _row_length(p: Pattern) -> int:
 
 @lru_cache(maxsize=4096)
 def _title_ratio(title: str, font: str, size: float, bold: bool, w: int, h: int) -> float:
-    """Largest of 100/85/70/60 % of the size at which the title fits the box (0 when none)."""
+    """Наибольшая из долей 100/85/70/60 % от кегля, при которой заголовок помещается в рамку (0, если ни
+    одна).
+    """
     return next((r for r in (1.0, 0.85, 0.7, 0.6) if fits([title], font, size * r, w, h, bold)), 0.0)
 
 
@@ -114,9 +120,9 @@ def score_pattern(p: Pattern, spec: SlideSpec, variant: Variant, used: dict[str,
     if w is None or p.kind == K.guide or p.score_hint < 0.2:
         return None
     if spec.intent != K.quote and not any(s.role == SlotRole.title for s in p.slots):
-        return None  # every non-quote slide must show its title
+        return None  # у каждого слайда, кроме цитаты, должен быть виден заголовок
     if p.kind == K.image_text and not has_image:
-        return None  # an empty picture frame (or someone else's photo) is worse than another layout
+        return None  # пустая рамка под фото (или чужое фото) хуже другого макета
     why = [f"{spec.intent.value}->{p.kind.value} x{w:.2f}"]
     s = 3.0 * w
     need = spec_items_count(spec)
@@ -128,19 +134,20 @@ def score_pattern(p: Pattern, spec: SlideSpec, variant: Variant, used: dict[str,
             s += 1.2
             why.append(f"items {need}=={p.n_items}")
         elif p.n_items > need and _removable(p) and p.n_items - need <= 2 and need >= 2 and p.source == "slide":
-            # (layout-only patterns cannot hide items: renderers still draw the layout's empty frames)
+            # (паттерны из одних макетов не могут прятать элементы: рендереры всё равно рисуют пустые рамки
+            # макета)
             s += 0.2
             keep = need
             why.append(f"items {need}<{p.n_items} (hide {p.n_items - need})")
             cols = _row_length(p)
             if cols and need > cols and need % cols == 1:
-                s -= 1.0  # 4 cards of a 3-column grid: three in a row and one alone below
+                s -= 1.0  # 4 карточки в сетке из 3 колонок: три в ряд и одна отдельно ниже
                 why.append(f"lone item in the last row ({need} in {cols} columns)")
         else:
             return None
     elif need > 0 and spec.intent in ITEM_KINDS:
-        s -= 0.8  # items would be flattened into text
-    # item structure: titles+texts need either two slots or a composite box
+        s -= 0.8  # элементы превратились бы в сплошной текст
+    # структура элементов: заголовкам+текстам нужны либо два слота, либо составная рамка
     if p.repeaters and spec.items:
         roles = set(p.repeaters[0].slot_roles)
         comp = any(sl.para_roles for sl in p.slots if sl.item_index == 0)
@@ -153,13 +160,14 @@ def score_pattern(p: Pattern, spec: SlideSpec, variant: Variant, used: dict[str,
             s -= 1.0
             why.append("no number slot")
         first = [sl for sl in p.slots if sl.item_index == 0 and sl.kind == "text"]
-        # item titles far longer than the template's title slot would be shrunk to unreadable
+        # заголовки элементов намного длиннее слота заголовка шаблона были бы уменьшены до нечитаемости
         caps = [sl.max_chars for sl in first if sl.role == SlotRole.item_title and not sl.para_roles and sl.max_chars]
         longest = max(len(i.title) for i in spec.items)
         if caps and longest > 1.3 * max(caps):
             s -= min(2.0, (longest / max(caps) - 1.3) * 1.5)
             why.append(f"item titles {longest}>{max(caps)} chars")
-        # big per-item slots that this content leaves empty (value labels without values, ...)
+        # крупные слоты на элемент, которые этот контент оставляет пустыми (подписи значений без значений,
+        # ...)
         has_values = any(i.value for i in spec.items)
         empty = [sl for sl in first if not sl.para_roles and (
             (sl.role == SlotRole.label and not has_values) or (sl.role == SlotRole.item_text and not has_texts
@@ -169,14 +177,15 @@ def score_pattern(p: Pattern, spec: SlideSpec, variant: Variant, used: dict[str,
         if share > 0.3:
             s -= 1.5 * share
             why.append(f"item slots left empty {share:.0%}")
-        # cards with a heading and a body (two frames or one two-style frame), for items that bring
-        # only one line (a title, or a text that then goes into the heading): every body stays empty
+        # карточки с заголовком и телом (две рамки или одна рамка с двумя стилями) для элементов, которые
+        # несут
+        # одну строку (заголовок или текст, который тогда уходит в заголовок): каждое тело остаётся пустым
         if (comp or SlotRole.item_title in roles and SlotRole.item_text in roles) and not (has_titles and has_texts):
             s -= 2.0
             why.append("card bodies left empty")
-    # a title longer than the example's: the part of the title frame that stays clear (before
-    # background art, above a subtitle that starts inside it) may hold it only in smaller type
-    # than on the other slides of the deck
+    # заголовок длиннее, чем в примере: свободная часть рамки заголовка (до фоновой графики,
+    # над подзаголовком, начинающимся внутри неё) вмещает его только более мелким кеглем,
+    # чем на остальных слайдах колоды
     t_slot = next((sl for sl in p.slots if sl.role == SlotRole.title and sl.item_index is None and sl.kind == "text"), None)
     if t_slot is not None and t_slot.style.size and spec.title and spec.intent not in (K.quote,):
         tb = clear_title_box(t_slot.box, title_clear) or t_slot.box
@@ -188,7 +197,7 @@ def score_pattern(p: Pattern, spec: SlideSpec, variant: Variant, used: dict[str,
         if r < 1.0:
             s -= {0.85: 0.4, 0.7: 0.9, 0.6: 1.4}.get(r, 2.0)
             why.append(f"title at {r:.0%} of its size" if r else "title does not fit")
-    # free slots that the spec cannot fill leave holes after deletion
+    # свободные слоты, которые спецификация не может заполнить, после удаления оставляют дыры
     fillable = {SlotRole.title, SlotRole.table, SlotRole.chart, SlotRole.icon, SlotRole.image, SlotRole.decor}
     if spec.subtitle or spec.message:
         fillable |= {SlotRole.subtitle, SlotRole.body}
@@ -197,14 +206,14 @@ def score_pattern(p: Pattern, spec: SlideSpec, variant: Variant, used: dict[str,
     if spec.intent == K.quote and spec.quote_author:
         fillable |= {SlotRole.caption, SlotRole.label, SlotRole.person}
     holes = [sl for sl in p.slots if sl.item_index is None and sl.kind == "text" and sl.role not in fillable]
-    # a divider's / closing slide's lead line (a pitch's call to action) must stay visible: without
-    # a subtitle frame it takes a free caption-like frame, without one it would be lost
+    # вводная фраза разделителя / финального слайда (призыв к действию в питче) должна оставаться видимой:
+    # без рамки подзаголовка она занимает свободную рамку вроде подписи, без неё — потерялась бы
     if (spec.subtitle or spec.message) and spec.intent in (K.section, K.thanks) and not any(
             sl.kind == "text" and sl.item_index is None and sl.role in (SlotRole.subtitle, SlotRole.body) for sl in p.slots):
         spare = sorted([sl for sl in holes if sl.role in (SlotRole.person, SlotRole.caption, SlotRole.label)], key=lambda sl: -sl.box.area)
         if spare:
             holes.remove(spare[0])
-            s -= 0.5  # a caption frame is a smaller stage for it than a subtitle
+            s -= 0.5  # рамка подписи — более скромное место для неё, чем подзаголовок
             why.append("lead line in a caption frame")
         else:
             s -= 2.0
@@ -212,7 +221,8 @@ def score_pattern(p: Pattern, spec: SlideSpec, variant: Variant, used: dict[str,
     if holes:
         s -= 0.25 * len(holes)
         why.append(f"{len(holes)} unfilled")
-    # slots left empty on painted layout placeholders show as empty cards in some renderers
+    # слоты, оставленные пустыми на окрашенных плейсхолдерах макета, в некоторых рендерерах видны как пустые
+    # карточки
     painted = [sl for sl in p.slots if sl.painted]
     if painted and slide_area:
         n_items = keep if keep is not None else (need if p.kind in ITEM_KINDS else 0)
@@ -220,6 +230,7 @@ def score_pattern(p: Pattern, spec: SlideSpec, variant: Variant, used: dict[str,
         has_texts = any(i.text for i in spec.items) or bool(spec.bullets)
 
         def unused(sl) -> bool:
+            """Слот останется пустым при этом содержании."""
             if sl.kind == "picture":
                 return not has_image
             if sl.item_index is not None:
@@ -231,12 +242,12 @@ def score_pattern(p: Pattern, spec: SlideSpec, variant: Variant, used: dict[str,
         if share > 0.01:
             s -= min(3.0, 12.0 * share)
             why.append(f"empty painted frames {share:.0%}")
-    # photos baked into the layout show on every slide built on it, whatever it is about:
-    # fine for a cover or a divider, off-topic next to content, and never twice in a deck
+    # фото, вшитые в макет, видны на каждом слайде на его основе, о чём бы он ни был:
+    # уместно на обложке или разделителе, не по теме рядом с содержанием и никогда дважды в колоде
     if layout_photo > 0.15 and spec.intent not in (K.title, K.section, K.thanks):
         s -= 1.0 + 2.0 * layout_uses
         why.append(f"layout photos {layout_photo:.0%}" + (f", used x{layout_uses}" if layout_uses else ""))
-    # photo frames stay empty (and are removed) without an image: the freed area is a hole too
+    # рамки под фото без изображения остаются пустыми (и удаляются): освободившаяся область — тоже дыра
     if not has_image and slide_area:
         pic = sum(sl.box.area for sl in p.slots if sl.kind == "picture" and sl.role == SlotRole.image
                   and sl.box.area > 0.04 * slide_area)
@@ -244,7 +255,7 @@ def score_pattern(p: Pattern, spec: SlideSpec, variant: Variant, used: dict[str,
             share = min(pic / slide_area, 1.0)
             s -= min(3.0, 10.0 * share)
             why.append(f"empty photo area {share:.0%}")
-    # text capacity vs content
+    # вместимость текста против объёма контента
     chars = spec_chars(spec) * variant.text_density
     cap = max(p.text_capacity, 1)
     if chars:
@@ -276,6 +287,7 @@ def compose_candidates(spec: SlideSpec, variant: Variant, has_image: bool = Fals
     item_pref = rep.get("items", ["cards", "steps", "bullets"])
 
     def pref_bonus(lst, name):
+        """Бонус за место способа отрисовки в списке предпочтений варианта."""
         return (len(lst) - lst.index(name)) * 0.35 if name in lst else 0.0
 
     if spec.chart and spec.chart.series:
@@ -284,7 +296,7 @@ def compose_candidates(spec: SlideSpec, variant: Variant, has_image: bool = Fals
             data.append(Candidate(2.6 + pref_bonus(data_pref, "table"), "compose:table", None, None, ["chart data as table"]))
         if len(spec.chart.series) == 1 and len(spec.chart.categories) <= 4:
             data.append(Candidate(2.5 + pref_bonus(data_pref, "kpi"), "compose:kpi", None, None, ["few values as KPI tiles"]))
-        # the variant's first available representation of series data wins (its identity)
+        # побеждает первое доступное в варианте представление рядов данных (его идентичность)
         first = next((c for name in data_pref for c in data if c.mode == f"compose:{name}"), None)
         if first is not None:
             first.score += 1.0
@@ -313,7 +325,7 @@ def compose_candidates(spec: SlideSpec, variant: Variant, has_image: bool = Fals
 
 
 def _chart_compatible(p: Pattern, spec: SlideSpec) -> bool:
-    """A native chart example is reused only for the same chart family."""
+    """Нативная диаграмма из примера переиспользуется только для того же семейства диаграмм."""
     if p.kind != K.chart:
         return True
     if not spec.chart:
@@ -325,16 +337,19 @@ def _chart_compatible(p: Pattern, spec: SlideSpec) -> bool:
 
 
 def _key(c: "Candidate") -> str:
+    """Ключ кандидата для сравнения выборов вариантов."""
     return c.pattern.id if c.pattern else c.mode
 
 
 def select_layouts(plan: DeckPlan, profile: TemplateProfile, variant: Variant,
                    avoid: dict[str, set[str]] | None = None, images: set[str] | None = None) -> list[SlideLayout]:
-    """`avoid` = choices other variants already made per slide: a near-equal alternative
-    is preferred so the three variants differ visibly while staying on-template."""
+    """`avoid` — выборы, уже сделанные другими вариантами для каждого слайда: предпочитается почти равноценная
+    альтернатива, чтобы три варианта заметно отличались, оставаясь в рамках шаблона.
+    """
     patterns = profile.usable_patterns()
     used: dict[str, int] = {}
-    photo_uses = 0  # slides already on layouts with baked-in photos (collages often repeat across layouts)
+    # слайды, уже стоящие на макетах с вшитыми фото (коллажи часто повторяются в разных макетах)
+    photo_uses = 0
     prev: str | None = None
     out: list[SlideLayout] = []
     avoid = avoid or {}
@@ -350,16 +365,18 @@ def select_layouts(plan: DeckPlan, profile: TemplateProfile, variant: Variant,
             if c:
                 cands.append(c)
         comp = compose_candidates(spec, variant, has_image)
-        # structured data is always drawn natively (charts/tables from data)
+        # структурированные данные всегда рисуются нативно (диаграммы/таблицы из данных)
         if spec.chart or spec.table:
             cands = [c for c in cands if c.pattern and c.pattern.kind in (K.table, K.chart) and "shape_table" not in c.pattern.tags
                      and "shape_chart" not in c.pattern.tags and _chart_compatible(c.pattern, spec)]
         cands += comp
-        taken = avoid.get(spec.id, set()) if spec.intent not in (K.title, K.thanks) else set()  # one brand cover
+        # одна брендовая обложка
+        taken = avoid.get(spec.id, set()) if spec.intent not in (K.title, K.thanks) else set()
         if taken and len(cands) > 1:
             for c in cands:
                 if (spec.chart or spec.table) and c.pattern is None:
-                    continue  # how data is drawn is each variant's own preference (represent.data)
+                    # способ отрисовки данных — собственное предпочтение каждого варианта (represent.data)
+                    continue
                 if _key(c) in taken:
                     c.score -= 1.3
                     c.why.append("taken by another variant")

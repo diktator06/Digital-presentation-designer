@@ -1,8 +1,8 @@
-"""Fixers for audit issues. Deterministic ones edit the PPTX directly;
-contextual ones (fix_llm / shorten_llm) go through the versioned `fixer` skill.
+"""Фиксеры замечаний аудита. Детерминированные правят PPTX напрямую;
+контекстные (fix_llm / shorten_llm) идут через версионируемый скилл `fixer`.
 
-apply_fixes() never mutates the input file: it writes deck_vN+1.pptx so the
-UI can show before/after and roll back.
+apply_fixes() никогда не меняет входной файл: пишет deck_vN+1.pptx, чтобы
+UI мог показать «до/после» и откатить.
 """
 from __future__ import annotations
 
@@ -29,6 +29,7 @@ log = logging.getLogger(__name__)
 
 class FixContext:
     def __init__(self, prs, profile: TemplateProfile, backgrounds: dict[tuple[int, int], str] | None = None):
+        """Контекст исправлений: открытая презентация, профиль шаблона и слайды к удалению."""
         self.prs = prs
         self.profile = profile
         self.slides = list(prs.slides)
@@ -36,6 +37,7 @@ class FixContext:
         self.to_drop: set[int] = set()
 
     def element(self, si: int, shape_id: int):
+        """Элемент слайда по id фигуры (с эффективным стилем и геометрией)."""
         s = self.slides[si]
         t = self.profile.tokens
         for e in extract_elements(s, parse_theme(s.slide_layout.slide_master), t.slide_w, t.slide_h, False):
@@ -45,21 +47,24 @@ class FixContext:
 
 
 def _runs(shape):
+    """Все текстовые фрагменты (a:r) фигуры."""
     txb = shape._element.find(qn("p:txBody"))
     return list(txb.iter(qn("a:r"))) if txb is not None else []
 
 
 # ----------------------------------------------------------------------------
 def _fits_at(e, factor: float) -> bool:
-    """The text, measured paragraph by paragraph with its spacing, fits the frame at size x factor."""
+    """Текст, измеренный абзац за абзацем с интервалами, помещается в рамку при кегле × factor."""
     m = measure_element(e, factor)
     l, _, r, _ = e.insets
     return m.height_emu <= e.box.h * 1.02 and m.longest_word_emu <= e.box.w - l - r
 
 
 def fx_shrink_text(fc: FixContext, iss: AuditIssue) -> bool:
-    """Smaller type until the text fits. A frame that mixes sizes (bold lead over body text)
-    is scaled by one factor, so its hierarchy survives; a uniform one steps down the scale."""
+    """Уменьшает кегль, пока текст не поместится. Рамка со смешанными кеглями (жирная вводная над основным
+    текстом) масштабируется одним коэффициентом, чтобы сохранить иерархию; однородная — спускается по
+    шкале.
+    """
     ok = False
     for sid in iss.shape_ids:
         sh = shape_by_id(fc.slides[iss.slide], sid)
@@ -85,8 +90,9 @@ def fx_shrink_text(fc: FixContext, iss: AuditIssue) -> bool:
 
 
 def fx_grow_frame(fc: FixContext, iss: AuditIssue) -> bool:
-    """Organisers' clarification: resizing a text frame inside its block is not a violation —
-    so the frame grows to its text first; the type shrinks only when the block has no room."""
+    """Уточнение организаторов: изменение размера текстовой рамки внутри её блока — не нарушение, поэтому
+    сначала рамка растёт под текст; кегль уменьшается, только если в блоке нет места.
+    """
     ok = False
     for sid in iss.shape_ids:
         slide = fc.slides[iss.slide]
@@ -108,6 +114,9 @@ def fx_grow_frame(fc: FixContext, iss: AuditIssue) -> bool:
 
 
 def fx_move_inside(fc: FixContext, iss: AuditIssue) -> bool:
+    """Возвращает объект внутрь слайда (не дальше половины полей), уменьшая его, если он больше доступной
+    области.
+    """
     t = fc.profile.tokens
     m = t.margins
     ok = False
@@ -132,11 +141,12 @@ def fx_snap_align(fc: FixContext, iss: AuditIssue) -> bool:
     b = shape_by_id(fc.slides[iss.slide], iss.shape_ids[1])
     if a is None or b is None:
         return False
-    b.left = a.left  # the first block (usually the title) is the guide
+    b.left = a.left  # первый блок (обычно заголовок) — ориентир
     return True
 
 
 def fx_set_template_font(fc: FixContext, iss: AuditIssue) -> bool:
+    """Заменяет шрифт, которого нет в шаблоне, на шрифт шаблона (заголовочный или основной)."""
     t = fc.profile.tokens
     for sid in iss.shape_ids:
         sh = shape_by_id(fc.slides[iss.slide], sid)
@@ -153,8 +163,9 @@ def fx_set_template_font(fc: FixContext, iss: AuditIssue) -> bool:
 
 
 def fx_snap_size(fc: FixContext, iss: AuditIssue) -> bool:
-    """Off-scale runs move to the nearest size of the template scale; a larger one only if the text
-    still fits its frame (otherwise the next smaller one). Other runs of the frame keep their size."""
+    """Фрагменты вне шкалы переходят к ближайшему кеглю шкалы шаблона; к большему — только если текст всё ещё
+    помещается в рамку (иначе к следующему меньшему). Остальные фрагменты рамки сохраняют кегль.
+    """
     size, nearest = iss.data.get("size"), iss.data.get("nearest")
     if not size or not nearest:
         return False
@@ -178,11 +189,13 @@ def fx_snap_size(fc: FixContext, iss: AuditIssue) -> bool:
 
 
 def _nearest_palette(fc: FixContext, hex_: str) -> str:
+    """Ближайший цвет палитры шаблона."""
     pal = [c.hex for c in fc.profile.tokens.palette]
     return min(pal, key=lambda p: color_distance(p, hex_)) if pal else hex_
 
 
 def fx_snap_color(fc: FixContext, iss: AuditIssue) -> bool:
+    """Заменяет цвет вне палитры на ближайший цвет шаблона."""
     c = iss.data.get("color")
     if not c:
         return False
@@ -198,6 +211,7 @@ def fx_snap_color(fc: FixContext, iss: AuditIssue) -> bool:
 
 
 def fx_fix_contrast(fc: FixContext, iss: AuditIssue) -> bool:
+    """Подбирает цвет текста из палитры с достаточным контрастом к фону."""
     bg = iss.data.get("bg")
     if not bg:
         return False
@@ -221,6 +235,7 @@ def fx_fix_contrast(fc: FixContext, iss: AuditIssue) -> bool:
 
 
 def fx_trim_bullets(fc: FixContext, iss: AuditIssue) -> bool:
+    """Сокращает список до допустимого числа пунктов."""
     for sid in iss.shape_ids:
         sh = shape_by_id(fc.slides[iss.slide], sid)
         if sh is None or not sh.has_text_frame:
@@ -231,6 +246,7 @@ def fx_trim_bullets(fc: FixContext, iss: AuditIssue) -> bool:
 
 
 def fx_trim_table(fc: FixContext, iss: AuditIssue) -> bool:
+    """Удаляет лишние строки таблицы сверх допустимого предела."""
     for sid in iss.shape_ids:
         sh = shape_by_id(fc.slides[iss.slide], sid)
         if sh is None or not getattr(sh, "has_table", False):
@@ -251,6 +267,7 @@ def fx_trim_table(fc: FixContext, iss: AuditIssue) -> bool:
 
 
 def fx_remove_placeholder(fc: FixContext, iss: AuditIssue) -> bool:
+    """Удаляет оставшийся текст-подсказку шаблона."""
     for sid in iss.shape_ids:
         sh = shape_by_id(fc.slides[iss.slide], sid)
         if sh is None or not sh.has_text_frame:
@@ -264,11 +281,13 @@ def fx_remove_placeholder(fc: FixContext, iss: AuditIssue) -> bool:
 
 
 def fx_drop_slide(fc: FixContext, iss: AuditIssue) -> bool:
+    """Помечает пустой слайд к удалению."""
     fc.to_drop.add(iss.slide)
     return True
 
 
 def fx_fix_aspect(fc: FixContext, iss: AuditIssue) -> bool:
+    """Восстанавливает пропорции изображения обрезкой по центру."""
     for sid in iss.shape_ids:
         sh = shape_by_id(fc.slides[iss.slide], sid)
         if sh is None:
@@ -304,7 +323,7 @@ AUTO_SAFE = {"shrink_text", "grow_frame", "remove_placeholder", "trim_table", "t
 
 
 async def fx_contextual(fc: FixContext, issues: list[AuditIssue], llm: LLMClient, language: str) -> int:
-    """Group LLM-fixable issues per slide and ask the `fixer` skill once per slide."""
+    """Группирует исправимые моделью замечания по слайдам и вызывает скилл `fixer` один раз на слайд."""
     if not llm.enabled:
         return 0
     skill = load_skill("fixer")
@@ -338,6 +357,7 @@ async def fx_contextual(fc: FixContext, issues: list[AuditIssue], llm: LLMClient
 
 async def apply_fixes(pptx: str | Path, issues: list[AuditIssue], profile: TemplateProfile, out: str | Path,
                       llm: LLMClient | None = None, language: str = "ru") -> dict:
+    """Применяет выбранные исправления и пишет новую версию колоды (исходный файл не меняется)."""
     prs = Presentation(str(pptx))
     fc = FixContext(prs, profile)
     applied, skipped, contextual = [], [], []

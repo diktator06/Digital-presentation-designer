@@ -5,6 +5,7 @@ import { scoreClass } from '../score'
 type Props = { run: Run; variant: Variant; initialSlide: number; onBack: () => void; onUpdate: (v: Variant) => void }
 
 export default function VariantViewer({ run, variant, initialSlide, onBack, onUpdate }: Props) {
+  // просмотр варианта: слайды с подсветкой проблем, замечания аудита и выбор исправлений
   const [slide, setSlide] = useState(initialSlide)
   const [dims, setDims] = useState<{ w: number; h: number }>({ w: 12192000, h: 6858000 })
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -14,11 +15,13 @@ export default function VariantViewer({ run, variant, initialSlide, onBack, onUp
   const [fixing, setFixing] = useState(false)
 
   useEffect(() => {
+    // размер слайда шаблона нужен, чтобы перевести рамки замечаний (EMU) в проценты картинки
     api.template(run.request.template_id).then((t) => setDims({ w: t.tokens.slide_w, h: t.tokens.slide_h }))
   }, [run.request.template_id])
 
   const issues = useMemo(() => variant.audit?.issues ?? [], [variant.audit])
   const perSlide = useMemo(() => {
+    // замечания по номерам слайдов
     const m: Record<number, AuditIssue[]> = {}
     issues.forEach((i) => (m[i.slide] ||= []).push(i))
     return m
@@ -29,6 +32,7 @@ export default function VariantViewer({ run, variant, initialSlide, onBack, onUp
   )
   const hiddenInfo = showInfo ? 0 : issues.filter((i) => (!onlySlide || i.slide === slide) && i.severity === 'info').length
   const groups = useMemo(() => {
+    // видимые замечания по категориям
     const g: Record<string, AuditIssue[]> = {}
     visible.forEach((i) => (g[i.category] ||= []).push(i))
     return g
@@ -38,6 +42,7 @@ export default function VariantViewer({ run, variant, initialSlide, onBack, onUp
 
   const toggle = (id: string) =>
     setSelected((s) => {
+      // отметить / снять замечание для исправления
       const n = new Set(s)
       if (n.has(id)) n.delete(id)
       else n.add(id)
@@ -46,6 +51,7 @@ export default function VariantViewer({ run, variant, initialSlide, onBack, onUp
   const selectAllFixable = () => setSelected(new Set(issues.filter((i) => i.fixable && i.severity !== 'info').map((i) => i.id)))
 
   const doFix = async () => {
+    // сервер применяет выбранные исправления, заново проводит аудит и возвращает новую версию
     setFixing(true)
     try {
       const nv = await api.fix(run.id, variant.name, [...selected])

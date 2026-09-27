@@ -1,4 +1,4 @@
-# Real open-weight model check (local Ollama): one template, three variants.
+# Проверка на реальной модели с открытыми весами (локальный Ollama): один шаблон, три варианта.
 settings: config/local_ollama.yaml
 templates:
   - data/templates/vk_education.pptx

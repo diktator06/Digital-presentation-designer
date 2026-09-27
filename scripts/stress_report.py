@@ -1,4 +1,4 @@
-"""Render a stress-test report.json into a Markdown table (docs/STRESS_RESULTS.md)."""
+"""Превращает report.json стресс-теста в таблицу Markdown (docs/STRESS_RESULTS.md)."""
 from __future__ import annotations
 
 import json
@@ -8,6 +8,7 @@ from pathlib import Path
 
 
 def main(report: str, out: str) -> None:
+    """Строит Markdown-таблицу результатов стресс-теста."""
     rows = json.loads(Path(report).read_text(encoding="utf-8"))
     lines = ["# Результаты слепого стресс-теста", "",
              "Сгенерировано `scripts/stress_report.py` из `report.json` (`scripts/stress.py`).", "",

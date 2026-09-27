@@ -1,4 +1,4 @@
-"""Low-level, format-preserving operations on python-pptx objects."""
+"""Низкоуровневые операции над объектами python-pptx с сохранением форматирования."""
 from __future__ import annotations
 
 import copy
@@ -13,9 +13,10 @@ _SKIP_RELS = ("notesSlide", "slideLayout", "comments")
 
 
 # ----------------------------------------------------------------------------
-# Slides
+# Слайды
 # ----------------------------------------------------------------------------
 def _remap_rids(root, rid_map: dict[str, str]) -> None:
+    """Переназначает ссылки r:id в XML скопированного слайда."""
     for el in root.iter():
         for attr in list(el.attrib):
             if attr.startswith(f"{{{R_NS}}}") and el.get(attr) in rid_map:
@@ -23,7 +24,8 @@ def _remap_rids(root, rid_map: dict[str, str]) -> None:
 
 
 def copy_chart_part(src_part, package):
-    """Independent copy of a chart part (+ embedded workbook) so each clone owns its data."""
+    """Независимая копия части диаграммы (+ встроенная книга Excel), чтобы у каждого клона были свои данные.
+    """
     from pptx.parts.chart import ChartPart
     from pptx.parts.embeddedpackage import EmbeddedXlsxPart
 
@@ -42,7 +44,8 @@ def copy_chart_part(src_part, package):
 
 
 def duplicate_slide(prs, src):
-    """Append a deep copy of `src` (shapes, background, images, media, links, own chart parts)."""
+    """Добавляет глубокую копию `src` (фигуры, фон, изображения, медиа, ссылки, собственные части диаграмм).
+    """
     new = prs.slides.add_slide(src.slide_layout)
     for shp in list(new.shapes):
         shp._element.getparent().remove(shp._element)
@@ -72,6 +75,7 @@ def duplicate_slide(prs, src):
 
 
 def delete_slides(prs, indices: list[int]) -> None:
+    """Удаляет слайды по индексам."""
     lst = prs.slides._sldIdLst
     ids = list(lst)
     for i in sorted(set(indices), reverse=True):
@@ -81,16 +85,17 @@ def delete_slides(prs, indices: list[int]) -> None:
 
 
 # ----------------------------------------------------------------------------
-# Shapes
+# Фигуры
 # ----------------------------------------------------------------------------
 def iter_all_shapes(shapes):
     for sh in shapes:
         yield sh
-        if sh.shape_type == 6:  # GROUP
+        if sh.shape_type == 6:  # ГРУППА
             yield from iter_all_shapes(sh.shapes)
 
 
 def shape_by_id(slide, shape_id: int):
+    """Фигура по id (включая фигуры внутри групп)."""
     for sh in iter_all_shapes(slide.shapes):
         if sh.shape_id == shape_id:
             return sh
@@ -102,7 +107,7 @@ def delete_shape(shape) -> None:
     parent = el.getparent()
     if parent is not None:
         parent.remove(el)
-        # remove now-empty groups
+        # удаляем опустевшие группы
         if etree.QName(parent).localname == "grpSp":
             children = [c for c in parent if etree.QName(c).localname not in ("nvGrpSpPr", "grpSpPr")]
             if not children and parent.getparent() is not None:
@@ -110,12 +115,13 @@ def delete_shape(shape) -> None:
 
 
 def move_shape(shape, dx: int, dy: int) -> None:
+    """Сдвигает фигуру."""
     shape.left = int(shape.left + dx)
     shape.top = int(shape.top + dy)
 
 
 # ----------------------------------------------------------------------------
-# Text (format preserving)
+# Текст (с сохранением форматирования)
 # ----------------------------------------------------------------------------
 def _clean_paragraph_copy(p_el, text: str):
     p = copy.deepcopy(p_el)
@@ -141,7 +147,7 @@ def _clean_paragraph_copy(p_el, text: str):
     if t is None:
         t = etree.SubElement(r, qn("a:t"))
     t.text = text
-    # endParaRPr must stay the last child
+    # endParaRPr должен оставаться последним дочерним элементом
     end = p.find(qn("a:endParaRPr"))
     if end is not None:
         p.remove(end)
@@ -150,10 +156,10 @@ def _clean_paragraph_copy(p_el, text: str):
 
 
 def set_paragraphs(shape, paragraphs: list[str], template_index: list[int] | None = None) -> None:
-    """Replace text keeping pPr/rPr of template paragraphs.
+    """Заменяет текст, сохраняя pPr/rPr абзацев шаблона.
 
-    template_index[i] = index of the source paragraph whose formatting the i-th
-    new paragraph copies (composite boxes: title style for 0, text style for 1..).
+        template_index[i] = индекс исходного абзаца, форматирование которого копирует i-й
+        новый абзац (составные рамки: стиль заголовка для 0, стиль текста для 1..).
     """
     txb = shape._element.find(qn("p:txBody"))
     if txb is None:
@@ -163,6 +169,7 @@ def set_paragraphs(shape, paragraphs: list[str], template_index: list[int] | Non
 
 
 def set_txbody_paragraphs(txb, paragraphs: list[str], template_index: list[int] | None = None) -> None:
+    """Заменяет абзацы txBody, сохраняя форматирование абзацев-образцов."""
     src_ps = txb.findall(qn("a:p"))
     non_empty = [p for p in src_ps if "".join(t.text or "" for t in p.iter(qn("a:t"))).strip()] or src_ps
     if not non_empty:
@@ -179,6 +186,7 @@ def set_txbody_paragraphs(txb, paragraphs: list[str], template_index: list[int] 
 
 
 def set_font_size(shape, size_pt: float) -> None:
+    """Задаёт один кегль всем фрагментам фигуры."""
     sz = str(int(round(size_pt * 100)))
     txb = shape._element.find(qn("p:txBody"))
     if txb is None:
@@ -194,6 +202,7 @@ def set_font_size(shape, size_pt: float) -> None:
 
 
 def scale_font_sizes(shape, factor: float, default_size: float) -> None:
+    """Масштабирует кегли всех фрагментов фигуры."""
     txb = shape._element.find(qn("p:txBody"))
     if txb is None:
         return
@@ -207,7 +216,7 @@ def scale_font_sizes(shape, factor: float, default_size: float) -> None:
 
 
 def scale_paragraph_sizes(shape, indices: list[int], factor: float, default_size: float) -> None:
-    """Scale the runs of some paragraphs only (a lead that gives way before the body text)."""
+    """Масштабирует только часть абзацев (вводная фраза уступает место основному тексту)."""
     txb = shape._element.find(qn("p:txBody"))
     if txb is None or factor >= 0.999:
         return
@@ -221,21 +230,23 @@ def scale_paragraph_sizes(shape, indices: list[int], factor: float, default_size
 
 
 # ----------------------------------------------------------------------------
-# Native tables / charts of template examples
+# Нативные таблицы / диаграммы из примеров шаблона
 # ----------------------------------------------------------------------------
 def table_has_merges(gf) -> bool:
+    """В таблице есть объединённые ячейки."""
     tbl = gf._element.graphic.graphicData.tbl
     return any(tc.get(a) for tc in tbl.iter(qn("a:tc")) for a in ("gridSpan", "rowSpan", "hMerge", "vMerge"))
 
 
 def fill_table(gf, columns: list[str], rows: list[list[str]], max_bottom: int | None = None) -> None:
-    """Refill a template table keeping its style: rows/columns are added by cloning the
-    last row/column (banding and cell formatting follow), removed from the end."""
+    """Перезаполняет таблицу шаблона с сохранением стиля: строки/колонки добавляются клонированием последней
+    строки/колонки (полосы и форматирование ячеек сохраняются), удаляются с конца.
+    """
     tbl = gf._element.graphic.graphicData.tbl
     grid = tbl.find(qn("a:tblGrid"))
     total_w = sum(int(gc.get("w")) for gc in grid.findall(qn("a:gridCol")))
     n_cols, n_rows = len(columns), len(rows) + 1
-    # columns
+    # колонки
     while len(grid.findall(qn("a:gridCol"))) > n_cols:
         grid.remove(grid.findall(qn("a:gridCol"))[-1])
         for tr in tbl.findall(qn("a:tr")):
@@ -248,16 +259,16 @@ def fill_table(gf, columns: list[str], rows: list[list[str]], max_bottom: int | 
     weights = [max(l, 4) ** 0.8 for l in lens]
     for gc, w in zip(grid.findall(qn("a:gridCol")), weights):
         gc.set("w", str(int(total_w * w / sum(weights))))
-    # rows (keep header + body rows; clone the body row pattern)
+    # строки (сохраняем шапку и строки тела; клонируем образец строки тела)
     trs = tbl.findall(qn("a:tr"))
     while len(trs) > n_rows:
         tbl.remove(trs[-1])
         trs = tbl.findall(qn("a:tr"))
     while len(trs) < n_rows:
-        proto = trs[-2] if len(trs) >= 3 else trs[-1]  # alternate banding when possible
+        proto = trs[-2] if len(trs) >= 3 else trs[-1]  # чередование полос, когда возможно
         tbl.append(copy.deepcopy(proto))
         trs = tbl.findall(qn("a:tr"))
-    # keep the table inside the slide: compress row heights if needed
+    # таблица остаётся внутри слайда: при необходимости сжимаем высоты строк
     heights = [int(tr.get("h", "0")) for tr in trs]
     if max_bottom is not None and sum(heights) and gf.top + sum(heights) > max_bottom:
         k = max((max_bottom - gf.top) / sum(heights), 0.5)
@@ -274,9 +285,11 @@ def fill_table(gf, columns: list[str], rows: list[list[str]], max_bottom: int | 
 
 
 def fit_table_text(gf, max_bottom: int, font: str, min_size: float = 10.0, default_size: float = 18.0) -> bool:
-    """After a refill: one scale factor for all cell text such that every word fits its column and
-    the rows, grown to their text, end above `max_bottom`; rows get the heights renderers will
-    draw. False when even the smallest readable size does not fit (the caller redraws the table)."""
+    """После перезаполнения: один коэффициент масштаба для текста всех ячеек, при котором каждое слово
+    помещается в свою колонку, а строки, выросшие под текст, заканчиваются выше `max_bottom`; строки
+    получают высоты, которые нарисуют рендереры. False, если не помещается даже наименьший читаемый кегль
+    (тогда вызывающий код перерисовывает таблицу).
+    """
     from decksmith.layout.textfit import measure
 
     tbl = gf._element.graphic.graphicData.tbl
@@ -301,7 +314,7 @@ def fit_table_text(gf, max_bottom: int, font: str, min_size: float = 10.0, defau
     if not rows:
         return True
     avail = max_bottom - int(gf.top)
-    k = min(1.0, avail / (sum(h for _, h, _ in rows) or 1))  # template row heights are minimums only
+    k = min(1.0, avail / (sum(h for _, h, _ in rows) or 1))  # высоты строк шаблона — лишь минимальные
     big = max((c[1] for _, _, cells in rows for c in cells), default=default_size)
     f = 1.0
     while True:
@@ -332,7 +345,7 @@ def fit_table_text(gf, max_bottom: int, font: str, min_size: float = 10.0, defau
 
 
 def fill_chart(gf, categories: list[str], series: list[tuple[str, list[float]]], unit: str = "") -> None:
-    """Replace chart data in place: the template's chart styling (colours, fonts, axes) stays."""
+    """Заменяет данные диаграммы на месте: оформление диаграммы шаблона (цвета, шрифты, оси) сохраняется."""
     from pptx.chart.data import CategoryChartData
 
     cd = CategoryChartData()
@@ -345,7 +358,7 @@ def fill_chart(gf, categories: list[str], series: list[tuple[str, list[float]]],
     xml = chart._chartSpace.xml
     has_axis_title = "<c:valAx>" in xml and "<c:title>" in xml.split("<c:valAx>")[-1]
     if not has_axis_title:
-        plot.has_data_labels = True  # values readable even without an axis title
+        plot.has_data_labels = True  # значения читаются и без названия оси
         try:
             plot.data_labels.show_value = True
         except Exception:
@@ -355,10 +368,10 @@ def fill_chart(gf, categories: list[str], series: list[tuple[str, list[float]]],
 
 
 # ----------------------------------------------------------------------------
-# Pictures
+# Изображения
 # ----------------------------------------------------------------------------
 def replace_picture(slide, shape, image_path: str | Path, mode: str = "cover") -> None:
-    """Swap the image of a picture shape keeping its frame; crop to avoid distortion."""
+    """Меняет картинку в фигуре-изображении, сохраняя рамку; обрезает, чтобы избежать искажений."""
     image_part, rid = slide.part.get_or_add_image_part(str(image_path))
     blip = shape._element.find(".//" + qn("a:blip"))
     if blip is None:
@@ -375,7 +388,7 @@ def replace_picture(slide, shape, image_path: str | Path, mode: str = "cover") -
     if mode == "cover" and fw and fh:
         img_ratio, box_ratio = iw / ih, fw / fh
         src = etree.Element(qn("a:srcRect"))
-        if img_ratio > box_ratio:  # crop left/right
+        if img_ratio > box_ratio:  # обрезка слева/справа
             crop = (1 - box_ratio / img_ratio) / 2
             src.set("l", str(int(crop * 100000)))
             src.set("r", str(int(crop * 100000)))

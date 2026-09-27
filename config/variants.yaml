@@ -1,10 +1,10 @@
-# Three layout variants for the same template + content.
-# Axis of difference = (density x visualisation mode x ordering). All variants
-# use only template patterns / tokens, so they are equally on-brand.
+# Три варианта вёрстки для одного шаблона и контента.
+# Ось различия = (плотность × способ визуализации × порядок). Все варианты
+# используют только паттерны / токены шаблона, поэтому одинаково соответствуют бренду.
 #
-# kind_bias      multiplies pattern scores per pattern kind
-# text_density   multiplies the character budget given to the writer
-# represent      how an abstract content block is rendered by preference
+# kind_bias      множитель оценки паттерна по его виду
+# text_density   множитель бюджета символов для автора текстов
+# represent      как предпочтительно отрисовывается абстрактный блок содержания
 #                (items -> cards|steps|table|bullets, series -> chart|table|kpi)
 
 balanced:
@@ -18,7 +18,7 @@ balanced:
   exec_summary_first: false
   images: 1
   prefer_icons: false
-  tone: auto            # auto | light | dark (for composed slides)
+  tone: auto            # auto | light | dark (для собранных слайдов)
 
 visual:
   title: "Визуальный"

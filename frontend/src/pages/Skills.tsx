@@ -4,6 +4,7 @@ import { api, CAT_RU } from '../api'
 type Data = Awaited<ReturnType<typeof api.skills>>
 
 export default function Skills() {
+  // вкладка скиллов: версии промптов/агентов и каталог проверок аудита
   const [d, setD] = useState<Data | null>(null)
   useEffect(() => {
     api.skills().then(setD)

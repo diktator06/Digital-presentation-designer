@@ -4,14 +4,15 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-os.environ.setdefault("DECKSMITH_LLM_PROVIDER", "offline")  # tests never call a model
-# own cache: test templates must not appear in the service's template list
+os.environ.setdefault("DECKSMITH_LLM_PROVIDER", "offline")  # тесты никогда не вызывают модель
+# свой кэш: тестовые шаблоны не должны появиться в списке шаблонов сервиса
 os.environ.setdefault("DECKSMITH_WORKSPACE", str(ROOT / "workspace" / "_test"))
 TEMPLATES = sorted((ROOT / "data" / "templates").glob("*.pptx"))
 
 
 @pytest.fixture(scope="session")
 def plan():
+    """Пример плана колоды из фикстуры."""
     from decksmith.core.models import DeckPlan
 
     return DeckPlan.model_validate_json((ROOT / "tests" / "fixtures" / "plan_sample.json").read_text(encoding="utf-8"))
@@ -19,7 +20,7 @@ def plan():
 
 @pytest.fixture(scope="session")
 def profiles():
-    """The organiser's dataset templates (not redistributed in the repo: put them into data/templates/)."""
+    """Шаблоны датасета организатора (не распространяются в репозитории: положите их в data/templates/)."""
     from decksmith.parsing.template_parser import analyze_template
 
     if not TEMPLATES:
@@ -29,7 +30,7 @@ def profiles():
 
 @pytest.fixture(scope="session")
 def unknown_template(tmp_path_factory) -> Path:
-    """A template the system has never seen: stock Office theme with a few example slides."""
+    """Шаблон, который система никогда не видела: стандартная тема Office с несколькими слайдами-примерами."""
     from pptx import Presentation
     from pptx.util import Inches, Pt
 

@@ -1,7 +1,7 @@
-"""HTTP API + static UI.
+"""HTTP API + статический UI.
 
-Templates and content packs are analysed on upload (before the user presses
-Enter); a run starts on POST /api/runs and streams progress over SSE.
+Шаблоны и контент-пакеты разбираются при загрузке (до того, как пользователь нажмёт
+Enter); запуск стартует по POST /api/runs и передаёт прогресс через SSE.
 """
 from __future__ import annotations
 
@@ -48,12 +48,12 @@ QUEUES: dict[str, list[asyncio.Queue]] = {}
 PENDING: dict[str, dict] = {}
 
 
-# ----------------------------------------------------------------------------- startup
+# ----------------------------------------------------------------------------- запуск
 def _load_existing() -> None:
     for p in (WS / "templates").glob("*/profile.json"):
         try:
             prof = TemplateProfile.model_validate_json(p.read_text(encoding="utf-8"))
-            if prof.parser_version == PARSER_VERSION:  # stale profiles are re-analysed on demand
+            if prof.parser_version == PARSER_VERSION:  # устаревшие профили разбираются заново по запросу
                 TEMPLATES[prof.id] = prof
         except Exception:
             continue
@@ -73,8 +73,9 @@ def _load_existing() -> None:
 @app.on_event("startup")
 async def startup() -> None:
     _load_existing()
-    # dataset templates are analysed in the background at start (pre-Enter work)
+
     async def warm():
+        # шаблоны датасета разбираются в фоне при старте (работа до Enter)
         for t in sorted((ROOT / "data" / "templates").glob("*.pptx")):
             try:
                 prof = await asyncio.to_thread(analyze_template, t, name=t.stem)
@@ -85,14 +86,16 @@ async def startup() -> None:
 
 
 def _url(path: str | Path | None) -> str | None:
+    """URL файла из рабочего каталога для фронтенда (None, если файла нет)."""
     if not path:
         return None
     rel = Path(path).resolve().relative_to(WS.resolve())
     return f"/files/{rel.as_posix()}"
 
 
-# ----------------------------------------------------------------------------- templates
+# ----------------------------------------------------------------------------- шаблоны
 def _template_card(p: TemplateProfile) -> dict:
+    """Карточка шаблона для списка в UI: сводка профиля и миниатюра обложки."""
     s = summarize(p)
     thumb = next((x for x in p.patterns if x.kind.value == "title" and x.thumbnail), None) or (p.patterns[0] if p.patterns else None)
     return {**s, "thumbnail": _url(thumb.thumbnail) if thumb and thumb.thumbnail else None,
@@ -101,11 +104,13 @@ def _template_card(p: TemplateProfile) -> dict:
 
 @app.get("/api/templates")
 def list_templates():
+    """Список разобранных шаблонов, по имени."""
     return [_template_card(p) for p in sorted(TEMPLATES.values(), key=lambda x: x.name)]
 
 
 @app.post("/api/templates")
 async def upload_template(file: UploadFile = File(...)):
+    """Загрузка шаблона: сохраняем файл и разбираем его сразу (до нажатия Enter)."""
     if Path(file.filename).suffix.lower() not in (".pptx", ".potx", ".pptm", ".potm", ".ppt", ".pot", ".odp", ".otp", ".key"):
         raise HTTPException(400, "Нужен файл презентации или шаблона: .pptx, .potx, .ppt, .odp, .otp")
     tmp = WS / "uploads" / f"{uuid.uuid4().hex[:8]}_{Path(file.filename).name}"
@@ -120,6 +125,7 @@ async def upload_template(file: UploadFile = File(...)):
 
 @app.get("/api/templates/{tid}")
 def get_template(tid: str):
+    """Полный профиль шаблона по id."""
     p = TEMPLATES.get(tid) or HTTPException(404)
     if isinstance(p, HTTPException):
         raise p
@@ -135,6 +141,7 @@ def get_template(tid: str):
 
 @app.get("/api/templates/{tid}/patterns/{pid}/overlay.png")
 def pattern_overlay(tid: str, pid: str):
+    """Картинка декомпозиции паттерна: рамки слотов поверх рендера слайда-примера."""
     p = TEMPLATES.get(tid)
     if not p:
         raise HTTPException(404)
@@ -145,15 +152,17 @@ def pattern_overlay(tid: str, pid: str):
     return FileResponse(out)
 
 
-# ----------------------------------------------------------------------------- content
+# ----------------------------------------------------------------------------- контент
 @app.get("/api/content")
 def list_content():
+    """Список загруженных контент-пакетов."""
     return [{"id": c.id, "files": [Path(f).name for f in c.files], "chunks": len(c.chunks), "tables": len(c.tables),
              "numbers": len(c.numbers), "language": c.language} for c in CORPORA.values()]
 
 
 @app.post("/api/content")
 async def upload_content(files: list[UploadFile] = File(...)):
+    """Загрузка контент-пакета: сохраняем файлы и извлекаем текст, таблицы и числа."""
     d = WS / "content" / uuid.uuid4().hex[:8]
     d.mkdir(parents=True, exist_ok=True)
     paths = []
@@ -177,7 +186,7 @@ async def upload_content(files: list[UploadFile] = File(...)):
 
 @app.post("/api/content/sample")
 async def sample_content():
-    """Ready-made content pack: every file shipped in data/content/ (PDF task text, sample brief...)."""
+    """Готовый контент-пакет: все файлы из data/content/ (текст задания в PDF, пример брифа...)."""
     files = sorted(p for p in (ROOT / "data" / "content").glob("*")
                    if p.suffix.lower() in (".pdf", ".md", ".docx", ".txt", ".pptx") and not p.stem.upper().startswith("README"))
     if not files:
@@ -191,7 +200,7 @@ async def sample_content():
             "numbers": len(corpus.numbers), "language": corpus.language}
 
 
-# ----------------------------------------------------------------------------- runs
+# ----------------------------------------------------------------------------- запуски
 class RunRequest(BaseModel):
     template_id: str
     content_id: str | None = None
@@ -203,12 +212,14 @@ class RunRequest(BaseModel):
 
 
 def _save_state(run_id: str) -> None:
+    """Сохраняет состояние запуска на диск (переживает перезапуск сервера)."""
     d = WS / "runs" / run_id
     d.mkdir(parents=True, exist_ok=True)
     (d / "state.json").write_text(json.dumps(RUNS[run_id], ensure_ascii=False), encoding="utf-8")
 
 
 async def _publish(run_id: str, ev: dict) -> None:
+    """Добавляет событие прогресса в историю запуска и рассылает его подписчикам SSE."""
     ev = {**ev, "ts": time.time()}
     RUNS[run_id].setdefault("events", []).append(ev)
     for q in QUEUES.get(run_id, []):
@@ -216,6 +227,7 @@ async def _publish(run_id: str, ev: dict) -> None:
 
 
 def _variant_payload(v) -> dict:
+    """Данные варианта для UI: стратегия, балл аудита, замечания, ссылки на файлы и слайды."""
     from decksmith.layout.selector import load_variants
 
     return {
@@ -231,6 +243,7 @@ def _variant_payload(v) -> dict:
 
 
 async def _run_job(run_id: str, req: RunRequest) -> None:
+    """Фоновая задача запуска: план, три варианта, аудит и экспорт с событиями прогресса."""
     prof = TEMPLATES[req.template_id]
     corpus = CORPORA.get(req.content_id) if req.content_id else ingest([], req.brief)
     brief = Brief(text=req.brief, purpose=req.purpose, n_slides=req.n_slides, audience=req.audience,
@@ -253,6 +266,7 @@ async def _run_job(run_id: str, req: RunRequest) -> None:
 
 @app.post("/api/runs")
 async def start_run(req: RunRequest, bg: BackgroundTasks):
+    """Старт запуска по брифу (нажатие Enter): возвращает id, прогресс идёт через SSE."""
     if req.template_id not in TEMPLATES:
         raise HTTPException(404, "template not found")
     run_id = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
@@ -264,12 +278,14 @@ async def start_run(req: RunRequest, bg: BackgroundTasks):
 
 @app.get("/api/runs")
 def list_runs():
+    """Список запусков, новые сверху."""
     return sorted(({k: v for k, v in r.items() if k in ("id", "status", "template", "elapsed_s", "started", "request")}
                    for r in RUNS.values()), key=lambda r: -r.get("started", 0))
 
 
 @app.get("/api/runs/{run_id}")
 def get_run(run_id: str):
+    """Состояние запуска по id."""
     r = RUNS.get(run_id)
     if not r:
         raise HTTPException(404)
@@ -278,12 +294,14 @@ def get_run(run_id: str):
 
 @app.get("/api/runs/{run_id}/events")
 async def run_events(run_id: str):
+    """Поток событий запуска (SSE): сначала история, затем новые события."""
     if run_id not in RUNS:
         raise HTTPException(404)
     q: asyncio.Queue = asyncio.Queue()
     QUEUES.setdefault(run_id, []).append(q)
 
     async def stream():
+        """Генератор SSE: отдаёт накопленные события, затем ждёт новые до завершения."""
         try:
             for ev in list(RUNS[run_id].get("events", [])):
                 yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
@@ -310,6 +328,7 @@ class FixRequest(BaseModel):
 
 @app.post("/api/runs/{run_id}/variants/{name}/fix")
 async def fix_variant(run_id: str, name: str, req: FixRequest):
+    """Применяет выбранные пользователем исправления к варианту и заново проводит аудит."""
     r = RUNS.get(run_id)
     if not r or r.get("status") != "done":
         raise HTTPException(404)
@@ -344,14 +363,16 @@ async def fix_variant(run_id: str, name: str, req: FixRequest):
     return v
 
 
-# ----------------------------------------------------------------------------- meta
+# ----------------------------------------------------------------------------- служебное
 @app.get("/api/skills")
 def skills():
+    """Версии скиллов/агентов и каталог проверок аудита."""
     return {"versions": list_versions(), "audit_checks": catalogue()}
 
 
 @app.get("/api/health")
 def health():
+    """Проверка работоспособности: подключённые модели и число шаблонов."""
     cfg = settings()
     return {"ok": True, "llm": cfg.llm.model if cfg.llm.enabled else "offline", "vlm": cfg.llm.vlm_model or None,
             "t2i": cfg.image.model if cfg.image.provider != "none" else None, "templates": len(TEMPLATES)}
@@ -364,4 +385,5 @@ if _ui.exists():
 else:
     @app.get("/")
     def root():
+        """Заглушка, если фронтенд не собран."""
         return JSONResponse({"ui": "frontend not built: cd frontend && npm i && npm run build"})

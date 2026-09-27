@@ -1,4 +1,4 @@
-"""Audit input model: what a check can look at (file facts + render + template rules)."""
+"""Модель входа аудита: на что может смотреть проверка (факты файла + рендер + правила шаблона)."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -15,8 +15,9 @@ from decksmith.parsing.ooxml import parse_theme, rgb_to_hex
 
 
 def measure_element(e: Element, size_factor: float = 1.0) -> Measure:
-    """Text height/lines of an element as renderers lay it out: each paragraph with its own
-    size, weight, spacing and line spacing, inside the frame's insets."""
+    """Высота/число строк текста элемента так, как его раскладывают рендереры: каждый абзац со своим кеглем,
+    насыщенностью, интервалами и межстрочным интервалом, внутри отступов рамки.
+    """
     l, t, r, b = e.insets
     w = e.box.w - (l + r - 2 * 91440)
     base = e.style.size if e.style and e.style.size else 14
@@ -36,22 +37,24 @@ class SlideFacts:
     layout_name: str
     elements: list[Element]
     png: Path | None = None
-    kind: str = ""  # pattern kind / compose kind the builder used
+    kind: str = ""  # вид паттерна / вид композиции, использованный сборщиком
 
     @property
     def texts(self) -> list[Element]:
+        """Непустые текстовые элементы слайда."""
         return [e for e in self.elements if e.kind == "text" and e.text.strip()]
 
     @property
     def content(self) -> list[Element]:
-        """Blocks that carry content (not decoration, not footers/page numbers)."""
+        """Блоки, несущие содержание (не декор, не колонтитулы/номера страниц)."""
         return [e for e in self.elements if not e.brand and ((e.kind == "text" and e.text.strip()) or e.kind in ("table", "chart"))]
 
     def _measure(self, e: Element):
+        """Замер текста элемента по реальным метрикам шрифта."""
         return measure_element(e)
 
     def effective_box(self, e: Element) -> Box:
-        """Box grown to the measured text height (auto-fit boxes grow when rendered)."""
+        """Рамка, выросшая до измеренной высоты текста (рамки с автоподбором растут при рендере)."""
         if e.kind != "text" or not e.style:
             return e.box
         m = self._measure(e)
@@ -60,8 +63,10 @@ class SlideFacts:
         return e.box
 
     def glyph_box(self, e: Element) -> Box:
-        """Where the text lines actually are: the measured height placed by the frame's vertical
-        anchor (text spilling out of a fixed frame still renders, so the full height counts)."""
+        """Где на самом деле стоят строки текста: измеренная высота, размещённая по вертикальной привязке
+        рамки (текст, вытекающий из фиксированной рамки, всё равно рисуется, поэтому учитывается вся
+        высота).
+        """
         if e.kind != "text" or not e.style:
             return e.box
         h = self._measure(e).height_emu
@@ -71,14 +76,14 @@ class SlideFacts:
         return Box(x=e.box.x, y=y, w=e.box.w, h=max(h, 1))
 
     def text_extent(self, e: Element) -> Box:
-        """Area actually covered by glyphs (for fill ratio)."""
+        """Площадь, реально покрытая глифами (для доли заполнения)."""
         if e.kind != "text" or not e.style:
             return e.box
         m = self._measure(e)
         return Box(x=e.box.x, y=e.box.y, w=min(e.box.w, m.width_emu), h=min(max(e.box.h, 0), m.height_emu) if not e.autofit else m.height_emu)
 
     def lines(self, e: Element) -> tuple[int, int]:
-        """(lines needed, lines that fit in the frame)."""
+        """(нужно строк, строк помещается в рамку)."""
         m = self._measure(e)
         _, t, _, b = e.insets
         line_h = (e.style.size or 14) * 1.2 * 12700
@@ -86,6 +91,7 @@ class SlideFacts:
         return m.lines, fit
 
     def text_height_needed(self, e: Element) -> int:
+        """Высота, нужная тексту элемента, в EMU."""
         return self._measure(e).height_emu
 
 
@@ -97,16 +103,18 @@ class AuditContext:
     corpus: ContentCorpus | None = None
     pngs: list[Path] = field(default_factory=list)
     slide_kinds: list[str] = field(default_factory=list)
-    slide_sources: list[int | None] = field(default_factory=list)  # template slide each output slide was cloned from
+    # слайд шаблона, из которого клонирован каждый слайд результата
+    slide_sources: list[int | None] = field(default_factory=list)
     brief_text: str = ""
     render_ok: bool = True
 
     @cached_property
     def template_prs(self):
+        """Презентация шаблона (для сравнения с примерами)."""
         return Presentation(self.profile.file)
 
     def template_element(self, i: int, shape_id: int) -> Element | None:
-        """The same shape in the template example slide (for 'inherited from template' checks)."""
+        """Та же фигура на слайде-примере шаблона (для проверок «унаследовано от шаблона»)."""
         src = self.slide_sources[i] if i < len(self.slide_sources) else None
         if src is None:
             return None
@@ -119,10 +127,12 @@ class AuditContext:
 
     @cached_property
     def prs(self):
+        """Проверяемая презентация."""
         return Presentation(str(self.pptx))
 
     @cached_property
     def slides(self) -> list[SlideFacts]:
+        """Факты по каждому слайду: элементы, макет, вид слайда, фон."""
         t = self.profile.tokens
         out = []
         for i, s in enumerate(self.prs.slides):
@@ -134,12 +144,13 @@ class AuditContext:
         return out
 
     def image(self, i: int) -> Image.Image | None:
+        """Рендер i-го слайда в RGB или None, если рендера нет."""
         if i < len(self.pngs) and self.pngs[i] and Path(self.pngs[i]).exists():
             return Image.open(self.pngs[i]).convert("RGB")
         return None
 
     def sample_background(self, i: int, box: Box) -> str | None:
-        """Dominant rendered color inside a box (text pixels are the minority)."""
+        """Преобладающий цвет рендера внутри рамки (пиксели текста в меньшинстве)."""
         im = self.image(i)
         if im is None:
             return None

@@ -1,7 +1,7 @@
-"""Font resolution for rendering fidelity and text measurement.
+"""Разрешение шрифтов для точности рендера и замера текста.
 
-Order: installed system/user fonts -> previously downloaded -> Google Fonts
-(OFL/Apache families, fetched by family name) -> metric fallback.
+Порядок: установленные системные/пользовательские шрифты -> скачанные ранее -> Google Fonts
+(семейства OFL/Apache, загрузка по имени семейства) -> метрическая замена.
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from decksmith.core.config import settings
 log = logging.getLogger(__name__)
 _LOCK = threading.Lock()
 
-# metric-compatible open substitutes only (same advance widths -> same line breaks)
+# только метрически совместимые открытые замены (та же ширина глифов -> те же переносы строк)
 FALLBACKS = {
     "calibri": "Carlito",
     "cambria": "Caladea",
@@ -36,6 +36,7 @@ FALLBACKS = {
 
 
 def _font_dirs() -> list[Path]:
+    """Каталоги шрифтов текущей ОС (первый — пользовательский)."""
     home = Path.home()
     if platform.system() == "Darwin":
         return [home / "Library/Fonts", Path("/Library/Fonts"), Path("/System/Library/Fonts"), Path("/System/Library/Fonts/Supplemental")]
@@ -43,12 +44,14 @@ def _font_dirs() -> list[Path]:
 
 
 def user_font_dir() -> Path:
+    """Пользовательский каталог шрифтов (куда кладутся скачанные)."""
     d = _font_dirs()[0]
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
 def _names(font: TTFont) -> tuple[str | None, str | None]:
+    """(семейство, начертание) из таблицы name шрифта."""
     name = font["name"]
     fam = name.getDebugName(16) or name.getDebugName(1)
     sub = name.getDebugName(17) or name.getDebugName(2)
@@ -57,7 +60,7 @@ def _names(font: TTFont) -> tuple[str | None, str | None]:
 
 @lru_cache(maxsize=1)
 def font_index() -> dict[str, dict[str, str]]:
-    """family(lower) -> {subfamily(lower): path}"""
+    """семейство (нижний регистр) -> {начертание (нижний регистр): путь}"""
     cache = settings().workspace / "font_index.json"
     if cache.exists():
         try:
@@ -84,12 +87,13 @@ def font_index() -> dict[str, dict[str, str]]:
 
 
 def refresh_index() -> None:
+    """Сбрасывает индекс шрифтов после установки новых."""
     cache = settings().workspace / "font_index.json"
     cache.unlink(missing_ok=True)
     font_index.cache_clear()
 
 
-# weight words that some templates put into the family name ("Montserrat Medium")
+# слова насыщенности, которые некоторые шаблоны вписывают в имя семейства («Montserrat Medium»)
 WEIGHTS = {"thin": 100, "hairline": 100, "extralight": 200, "ultralight": 200, "light": 300, "regular": 400,
            "book": 400, "normal": 400, "medium": 500, "semibold": 600, "demibold": 600, "bold": 700,
            "extrabold": 800, "ultrabold": 800, "black": 900, "heavy": 900}
@@ -105,6 +109,7 @@ def split_weight(family: str) -> tuple[str, str | None]:
 
 
 def find_font_file(family: str, bold: bool = False) -> str | None:
+    """Файл шрифта семейства с подходящим начертанием (жирное или обычное)."""
     idx = font_index()
     fam = idx.get(family.lower())
     prefs = ["bold", "semibold", "medium"] if bold else ["regular", "book", "normal", "roman", "medium"]
@@ -121,24 +126,26 @@ def find_font_file(family: str, bold: bool = False) -> str | None:
 
 
 def _gf_slug(family: str) -> str:
+    """Имя семейства в виде идентификатора Google Fonts."""
     return re.sub(r"[^a-z0-9]", "", family.lower())
 
 
-# system fonts of commercial OSes: never on Google Fonts, don't waste requests
+# системные шрифты коммерческих ОС: их никогда нет в Google Fonts, не тратим запросы
 PROPRIETARY = {
     "calibri", "calibri light", "cambria", "consolas", "segoe ui", "arial", "helvetica", "times new roman",
     "verdana", "tahoma", "georgia", "courier new", "sf pro", "sf pro display", "sf pro text",
 }
 _MISSING: set[str] = set()
 _NET_DOWN_UNTIL = 0.0
-DOWNLOAD_BUDGET_S = 15.0  # per template analysis: fonts are a fidelity bonus, never a blocker
+DOWNLOAD_BUDGET_S = 15.0  # на разбор одного шаблона: шрифты повышают точность, но никогда не блокируют
 
 
 def try_download_google_font(family: str, deadline: float | None = None) -> bool:
-    """Fetch an open (OFL/Apache) family from Google Fonts by name: one CSS request per weight
-    lists a TrueType file (legacy user agent). Time-bounded: short timeouts, a shared deadline
-    and a 10-minute back-off when the network is unreachable, so a slow or offline machine
-    never stalls template analysis."""
+    """Скачивает открытое (OFL/Apache) семейство из Google Fonts по имени: один CSS-запрос на насыщенность
+    указывает файл TrueType (устаревший user agent). Ограничено по времени: короткие таймауты, общий
+    дедлайн и пауза 10 минут, если сеть недоступна, поэтому медленная или офлайн-машина никогда не
+    задерживает разбор шаблона.
+    """
     global _NET_DOWN_UNTIL
     base, weight = split_weight(family)
     if base.lower() in PROPRIETARY or base.lower() in _MISSING or time.monotonic() < _NET_DOWN_UNTIL:
@@ -155,8 +162,8 @@ def try_download_google_font(family: str, deadline: float | None = None) -> bool
                 css = client.get("https://fonts.googleapis.com/css2", params={"family": f"{base}:wght@{w}"})
                 if css.status_code != 200:
                     if w == 400:
-                        break  # not a Google Fonts family
-                    continue  # family lacks this weight
+                        break  # не семейство Google Fonts
+                    continue  # у семейства нет такой насыщенности
                 urls = re.findall(r"url\((https://fonts\.gstatic\.com/[^)]+\.ttf)\)", css.text)
                 if urls:
                     r = client.get(urls[0])
@@ -175,7 +182,7 @@ def try_download_google_font(family: str, deadline: float | None = None) -> bool
 
 
 def ensure_font(family: str, allow_download: bool = True, deadline: float | None = None) -> tuple[bool, str | None]:
-    """Returns (available, file). Tries to make the family available locally."""
+    """Возвращает (доступен, файл). Пытается сделать семейство доступным локально."""
     f = find_font_file(family)
     if f:
         return True, f
@@ -191,6 +198,7 @@ def ensure_font(family: str, allow_download: bool = True, deadline: float | None
 
 @lru_cache(maxsize=256)
 def pil_font(family: str, size_px: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    """Шрифт Pillow для замера: семейство, его метрическая замена или системный запасной."""
     f = find_font_file(family, bold) or find_font_file(FALLBACKS.get(family.lower(), ""), bold)
     for cand in (f, find_font_file("Arial", bold), find_font_file("DejaVu Sans", bold), find_font_file("Helvetica", bold)):
         if cand:

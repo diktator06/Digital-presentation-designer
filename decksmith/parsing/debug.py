@@ -1,4 +1,4 @@
-"""Visual decomposition report: slot boxes drawn over rendered template slides."""
+"""Отчёт о визуальной декомпозиции: рамки слотов поверх отрендеренных слайдов шаблона."""
 from __future__ import annotations
 
 import math
@@ -26,6 +26,7 @@ ROLE_COLORS = {
 
 
 def overlay(profile: TemplateProfile, pattern: Pattern, width: int = 640) -> Image.Image:
+    """Рендер слайда-примера с рамками слотов паттерна, подписанными по ролям."""
     sw, sh = profile.tokens.slide_w, profile.tokens.slide_h
     height = int(width * sh / sw)
     if pattern.thumbnail and Path(pattern.thumbnail).exists():
@@ -49,6 +50,7 @@ def overlay(profile: TemplateProfile, pattern: Pattern, width: int = 640) -> Ima
 
 
 def contact_sheet(profile: TemplateProfile, out: str | Path, cols: int = 4, width: int = 480, only_slides: bool = True) -> Path:
+    """Контакт-лист декомпозиции: все паттерны шаблона сеткой в одной картинке."""
     pats = [p for p in profile.patterns if (p.source == "slide" or not only_slides)]
     tiles = [overlay(profile, p, width) for p in pats]
     if not tiles:

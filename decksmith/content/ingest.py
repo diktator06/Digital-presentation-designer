@@ -1,7 +1,7 @@
-"""Content pack ingestion: files -> ContentCorpus (text chunks, tables, numeric facts).
+"""Приём контент-пакета: файлы -> ContentCorpus (текстовые фрагменты, таблицы, числовые факты).
 
-Also provides deterministic BM25 retrieval of the chunks most relevant to the
-brief, so large content packs fit the model context without embeddings.
+Также даёт детерминированный поиск BM25 самых релевантных брифу фрагментов,
+чтобы большие контент-пакеты помещались в контекст модели без эмбеддингов.
 """
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ WORD_RE = re.compile(r"[a-zA-Zа-яА-ЯёЁ0-9]{2,}")
 
 
 def _chunks(text: str, source: str, page: int | None, size: int = 1400) -> list[ContentChunk]:
+    """Режет текст на фрагменты по абзацам не длиннее `size` символов."""
     paras = [p.strip() for p in re.split(r"\n\s*\n|\n(?=[•●\-–]\s)", text) if p.strip()]
     out, buf = [], ""
     for p in paras:
@@ -35,6 +36,7 @@ def _chunks(text: str, source: str, page: int | None, size: int = 1400) -> list[
 
 
 def read_pdf(path: Path) -> tuple[list[ContentChunk], list[DataTable]]:
+    """PDF -> текстовые фрагменты по страницам и таблицы."""
     import pymupdf
 
     chunks = []
@@ -47,6 +49,7 @@ def read_pdf(path: Path) -> tuple[list[ContentChunk], list[DataTable]]:
 
 
 def read_docx(path: Path) -> tuple[list[ContentChunk], list[DataTable]]:
+    """DOCX -> фрагменты текста и таблицы."""
     import docx
 
     d = docx.Document(str(path))
@@ -60,6 +63,7 @@ def read_docx(path: Path) -> tuple[list[ContentChunk], list[DataTable]]:
 
 
 def read_pptx(path: Path) -> tuple[list[ContentChunk], list[DataTable]]:
+    """PPTX -> текст слайдов (как фрагменты) и таблицы."""
     from pptx import Presentation
 
     prs = Presentation(str(path))
@@ -79,6 +83,7 @@ def read_pptx(path: Path) -> tuple[list[ContentChunk], list[DataTable]]:
 
 
 def read_table(path: Path) -> tuple[list[ContentChunk], list[DataTable]]:
+    """CSV/XLSX -> таблица данных (+ её текстовое представление)."""
     rows: list[list] = []
     if path.suffix.lower() == ".csv":
         with open(path, newline="", encoding="utf-8-sig") as f:
@@ -105,6 +110,7 @@ def read_table(path: Path) -> tuple[list[ContentChunk], list[DataTable]]:
 
 
 def read_text(path: Path) -> tuple[list[ContentChunk], list[DataTable]]:
+    """TXT/MD -> фрагменты текста."""
     return _chunks(path.read_text(encoding="utf-8", errors="ignore"), str(path), None), []
 
 
@@ -113,11 +119,13 @@ READERS = {".pdf": read_pdf, ".docx": read_docx, ".pptx": read_pptx, ".csv": rea
 
 
 def normalize_number(s: str) -> str:
+    """Нормализует запись числа для сравнения (пробелы, минус, десятичная запятая)."""
     t = s.strip().replace(" ", "").replace(" ", "").replace("−", "-").replace(",", ".")
     return t.lower()
 
 
 def ingest(paths: list[str | Path], extra_text: str = "") -> ContentCorpus:
+    """Собирает контент-пакет: читает файлы, добавляет бриф, извлекает числовые факты и язык."""
     chunks: list[ContentChunk] = []
     tables: list[DataTable] = []
     files = []
@@ -148,14 +156,14 @@ def ingest(paths: list[str | Path], extra_text: str = "") -> ContentCorpus:
 
 
 # ----------------------------------------------------------------------------
-# Retrieval
+# Поиск
 # ----------------------------------------------------------------------------
 def _tokens(text: str) -> list[str]:
-    return [w.lower()[:7] for w in WORD_RE.findall(text)]  # crude stemming by prefix
+    return [w.lower()[:7] for w in WORD_RE.findall(text)]  # грубый стемминг по префиксу
 
 
 def select_context(corpus: ContentCorpus, query: str, budget_chars: int = 18000) -> str:
-    """BM25 top chunks (kept in document order) within a character budget."""
+    """Лучшие фрагменты по BM25 (в порядке документа) в пределах бюджета символов."""
     if not corpus.chunks:
         return ""
     total = sum(len(c.text) for c in corpus.chunks)
@@ -175,7 +183,7 @@ def select_context(corpus: ContentCorpus, query: str, budget_chars: int = 18000)
                 continue
             idf = math.log(1 + (n - df[t] + 0.5) / (df[t] + 0.5))
             s += idf * tf[t] * 2.2 / (tf[t] + 1.2 * (0.25 + 0.75 * len(d) / avgdl))
-        scores.append((s + 0.01 * (n - i) / n, i))  # slight preference for early chunks
+        scores.append((s + 0.01 * (n - i) / n, i))  # лёгкое предпочтение ранним фрагментам
     chosen, used = set(), 0
     for s, i in sorted(scores, reverse=True):
         L = len(corpus.chunks[i].text)

@@ -1,9 +1,9 @@
-"""Blind templates: the final defence uses a template nobody has seen.
+"""Слепые шаблоны: на финальной защите используется шаблон, которого никто не видел.
 
-These tests build complete decks on synthetic templates with deliberately hard
-properties (no example slides, 4:3, footers on every slide, titles as free text
-boxes, no placeholders at all, dark theme, .potx input) and assert that the
-output is clean, on-template and that the three variants differ.
+Эти тесты собирают полные колоды на синтетических шаблонах с намеренно трудными
+свойствами (нет слайдов-примеров, 4:3, колонтитулы на каждом слайде, заголовки свободными
+текстовыми блоками, вообще нет плейсхолдеров, тёмная тема, вход .potx) и проверяют, что
+результат чистый, соответствует шаблону и три варианта различаются.
 """
 import asyncio
 import re
@@ -29,6 +29,7 @@ HARD_ERRORS = {"integrity.title_missing", "integrity.content_lost", "integrity.e
 
 
 def _build_all(template: Path, plan, out: Path):
+    """Разбор шаблона и сборка трёх вариантов с рендером и аудитом."""
     prof = analyze_template(template, force=True)
     chosen = plan_variants(plan, prof, list(load_variants()))
     results = {}
@@ -47,6 +48,7 @@ def _build_all(template: Path, plan, out: Path):
 
 @pytest.mark.parametrize("gen", sorted(GENERATORS))
 def test_synthetic_template_end_to_end(gen, plan, tmp_path):
+    """Синтетический шаблон: полная колода без ошибок во всех вариантах."""
     t = GENERATORS[gen](tmp_path / f"{gen}.pptx")
     prof, chosen, results = _build_all(t, plan, tmp_path)
     for name, (rep, audit, n_pngs, n_expected) in results.items():
@@ -61,7 +63,7 @@ def test_synthetic_template_end_to_end(gen, plan, tmp_path):
 
 
 def test_brand_texts_survive(plan, tmp_path):
-    """A footer text repeated on every example slide is brand furniture: never deleted."""
+    """Текст колонтитула, повторённый на каждом слайде-примере, — брендовый элемент: никогда не удаляется."""
     t = GENERATORS["brand_footer"](tmp_path / "brand.pptx")
     prof, chosen, results = _build_all(t, plan, tmp_path)
     from pptx import Presentation
@@ -74,6 +76,7 @@ def test_brand_texts_survive(plan, tmp_path):
 
 
 def test_potx_input_is_accepted(tmp_path):
+    """Шаблон .potx принимается наравне с .pptx."""
     src = GENERATORS["dark_minimal"](tmp_path / "t.pptx")
     potx = tmp_path / "t.potx"
     with zipfile.ZipFile(src) as zin, zipfile.ZipFile(potx, "w") as zout:
@@ -87,6 +90,7 @@ def test_potx_input_is_accepted(tmp_path):
 
 
 def test_profile_does_not_depend_on_file_name(tmp_path):
+    """Профиль шаблона не зависит от имени файла."""
     a = GENERATORS["blank_layouts"](tmp_path / "a.pptx")
     b = tmp_path / "совсем_другое_имя.pptx"
     shutil.copy(a, b)
@@ -96,7 +100,7 @@ def test_profile_does_not_depend_on_file_name(tmp_path):
 
 
 def test_no_dataset_specific_code():
-    """Anti-overfitting lint: the package must not mention the dataset templates."""
+    """Проверка против подгонки: пакет не должен упоминать шаблоны датасета."""
     banned = re.compile(r"vk[\s_-]?(tech|education|workspace)|google shape|свободный дизайн|\bVK\b", re.I)
     hits = []
     for p in (ROOT / "decksmith").rglob("*.py"):
@@ -109,12 +113,13 @@ def test_no_dataset_specific_code():
 
 
 def test_layout_frames_follow_document_order(unknown_template, tmp_path):
-    """python-pptx lists slide placeholders sorted by idx: frames must still be paired with
-    their own layout counterparts when the idx order differs from the document order."""
+    """python-pptx перечисляет плейсхолдеры слайда по idx: рамки всё равно должны сопоставляться со своими
+    двойниками в макете, когда порядок idx отличается от порядка в документе.
+    """
     from pptx import Presentation
 
     prs = Presentation(unknown_template)
-    layout = prs.slide_layouts[3]  # title + two content columns
+    layout = prs.slide_layouts[3]  # заголовок + две колонки контента
     left, right = sorted([ph for ph in layout.placeholders if ph.placeholder_format.idx in (1, 2)], key=lambda p: p.left)
     left._element.ph.set("idx", "20")
     right._element.ph.set("idx", "13")

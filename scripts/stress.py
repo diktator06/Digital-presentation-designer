@@ -1,8 +1,8 @@
-"""Blind-template stress test.
+"""Слепой стресс-тест шаблонов.
 
-For every template: analyse (as an unknown template) -> 3 variants of the same
-plan -> build -> render -> deterministic audit -> robustness metrics, plus a
-contact sheet per template for visual review.
+Для каждого шаблона: разбор (как незнакомого шаблона) -> 3 варианта одного плана ->
+сборка -> рендер -> детерминированный аудит -> метрики устойчивости, плюс
+контакт-лист на шаблон для визуальной проверки.
 
   python scripts/stress.py workspace/blind/lo/*.pptx workspace/blind/lct2026.pptx --synthetic --out workspace/stress
 """
@@ -26,7 +26,7 @@ def run_one(template: str, out_dir: str, plan_path: str) -> dict:
     import os
 
     os.environ.setdefault("DECKSMITH_LLM_PROVIDER", "offline")
-    # own cache: stress templates must not appear in the service's template list
+    # свой кэш: шаблоны стресс-теста не должны появиться в списке шаблонов сервиса
     os.environ.setdefault("DECKSMITH_WORKSPACE", str(Path(out_dir) / "_workspace"))
     from PIL import Image, ImageDraw
 
@@ -99,7 +99,7 @@ def run_one(template: str, out_dir: str, plan_path: str) -> dict:
                 n = min(len(a), len(b2))
                 diffs.append(sum(a[k] != b2[k] for k in range(n)) / max(n, 1))
         res["variant_distinctness"] = round(min(diffs), 2) if diffs else 0
-        # contact sheet: one row per variant
+        # контакт-лист: одна строка на вариант
         cols = max(len(p) for _, p in sheets)
         tw = 240
         th = int(tw * prof.tokens.slide_h / prof.tokens.slide_w)
@@ -118,6 +118,7 @@ def run_one(template: str, out_dir: str, plan_path: str) -> dict:
 
 
 def main() -> None:
+    """Запуск стресс-теста по списку шаблонов."""
     ap = argparse.ArgumentParser()
     ap.add_argument("templates", nargs="*")
     ap.add_argument("--synthetic", action="store_true")

@@ -1,5 +1,5 @@
-# End-to-end run with the model from .env (DECKSMITH_LLM_*): same brief and content as the
-# offline demo, so the two can be compared slide by slide.
+# Сквозной запуск с моделью из .env (DECKSMITH_LLM_*): тот же бриф и контент, что в
+# офлайн-демо, чтобы их можно было сравнить слайд за слайдом.
 #   decksmith run configs/real_model_e2e.yaml
 templates:
   - data/templates/vk_education.pptx

@@ -1,8 +1,8 @@
-# Hosted OpenAI-compatible aggregator in the OpenRouter style (VseGPT, OpenRouter, ...).
-# Endpoint, key and model names come from .env; only the request details differ from default.yaml:
-# Qwen3 reasoning is switched off with OpenRouter's `reasoning` parameter (the vLLM
-# `chat_template_kwargs` switch is ignored by these hosts), and parallelism is moderate
-# because shared upstream providers rate-limit bursts (HTTP 429 is retried with backoff).
+# Хостинговый OpenAI-совместимый агрегатор в стиле OpenRouter (VseGPT, OpenRouter, ...).
+# Endpoint, ключ и имена моделей берутся из .env; от default.yaml отличаются только детали запросов:
+# «размышления» Qwen3 выключаются параметром `reasoning` в стиле OpenRouter (переключатель vLLM
+# `chat_template_kwargs` эти хосты игнорируют), а параллелизм умеренный, потому что общие
+# провайдеры ограничивают всплески запросов (HTTP 429 повторяется с паузой).
 #   .env: DECKSMITH_CONFIG=config/vsegpt.yaml
 llm:
   provider: ${DECKSMITH_LLM_PROVIDER:-openai_compatible}
@@ -11,7 +11,7 @@ llm:
   model: ${DECKSMITH_LLM_MODEL:-qwen/qwen3.6-35b-a3b}
   vlm_model: ${DECKSMITH_VLM_MODEL:-}
   max_concurrency: 8
-  max_rps: 0.7            # VseGPT: "no more than 1 request per 1.0 second" per key (with margin)
+  max_rps: 0.7            # VseGPT: «не больше 1 запроса в 1,0 секунды» на ключ (с запасом)
   timeout_s: 120
   temperature: 0.3
   max_retries: 3

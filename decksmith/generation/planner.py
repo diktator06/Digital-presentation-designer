@@ -1,11 +1,11 @@
-"""Brief + content corpus -> DeckPlan.
+"""Бриф + контент-пакет -> DeckPlan.
 
-Two LLM stages (fast and robust vs. one huge JSON):
-  1. outline      : slide list with intents and conclusion-style titles (1 call)
-  2. slide_writer : content of every slide, all calls in parallel
+Два этапа LLM (быстро и надёжно вместо одного огромного JSON):
+  1. outline      : список слайдов с интентами и заголовками-выводами (1 вызов)
+  2. slide_writer : содержимое каждого слайда, все вызовы параллельно
 
-Offline mode (no endpoint configured) uses an extractive, deterministic planner
-so the whole pipeline — and the test-suite — runs without a model.
+Офлайн-режим (endpoint не задан) использует экстрактивный детерминированный планировщик,
+поэтому весь пайплайн — и тесты — работают без модели.
 """
 from __future__ import annotations
 
@@ -73,7 +73,7 @@ VALID = {k.value for k in PatternKind} - {"guide", "free"}
 
 
 def template_capabilities(profile: TemplateProfile) -> tuple[str, int]:
-    """Short human-readable summary of what the template can lay out + title budget."""
+    """Короткое понятное описание того, что умеет вёрстка шаблона, и бюджет длины заголовка."""
     by_kind: dict[str, set[int]] = {}
     for p in profile.usable_patterns():
         if p.score_hint < 0.3:
@@ -91,7 +91,7 @@ def template_capabilities(profile: TemplateProfile) -> tuple[str, int]:
         li = profile.layouts[p.layout_index] if p.layout_index is not None and 0 <= p.layout_index < len(profile.layouts) else None
         for s in p.slots:
             if s.role.value == "title" and s.max_chars:
-                k = 1.0  # titles are cut short where background art sits in the title band
+                k = 1.0  # заголовки укорачиваются там, где в полосе заголовка стоит фоновая графика
                 if li is not None and li.title_clear is not None and s.box.r > li.title_clear.r and s.box.w:
                     k = max(li.title_clear.r - s.box.x, 0) / s.box.w
                 titles.append(int(s.max_chars * k))
@@ -101,14 +101,15 @@ def template_capabilities(profile: TemplateProfile) -> tuple[str, int]:
 
 
 def section_cap(n_slides: int) -> int:
-    """Dividers only pay off in longer decks: none up to 8 slides, at most two."""
+    """Разделители окупаются только в длинных колодах: до 8 слайдов — ни одного, всего не больше двух."""
     return min(2, max(0, (n_slides - 6) // 3))
 
 
 def limit_sections(o: Outline, cap: int) -> int:
-    """Deterministic fallback after the repair round: dividers above the cap, and dividers not
-    followed by content, become content slides (the writer fills them from the materials), so
-    the deck keeps the requested number of slides. Returns how many were converted."""
+    """Детерминированный запасной ход после раунда исправления: разделители сверх предела и разделители, за
+    которыми нет содержания, становятся содержательными слайдами (их заполняет автор текстов по
+    материалам), так что колода сохраняет заданное число слайдов. Возвращает число преобразованных.
+    """
     kept, converted = 0, 0
     for i, s in enumerate(o.slides):
         if s.intent != "section":
@@ -132,12 +133,12 @@ def _normalize_outline(o: Outline, brief: Brief) -> Outline:
         slides.insert(0, OutlineSlide(intent="title", title=o.title, message=o.subtitle))
     if slides[-1].intent not in ("thanks", "contacts"):
         slides.append(OutlineSlide(intent="thanks", title="Спасибо!" if brief.language == "ru" else "Thank you!"))
-    hi = max(brief.n_slides, 3)  # TZ: the number of slides the user asked for
-    while len(slides) > hi:  # drop from the middle, keep title/agenda/closing
+    hi = max(brief.n_slides, 3)  # ТЗ: столько слайдов, сколько попросил пользователь
+    while len(slides) > hi:  # удаляем из середины, сохраняя обложку, содержание и финал
         idx = next((i for i in range(len(slides) - 2, 1, -1) if slides[i].intent == "section"), len(slides) - 2)
         slides.pop(idx)
-    # a model that still answers short after the repair round: the missing slides are the ones a
-    # deck of that size would have anyway — the conclusions before the closing slide, the contents
+    # модель и после раунда исправления ответила короче: недостающие слайды — те, что колода такого
+    # размера имела бы всё равно, — выводы перед финалом и содержание
     ru = brief.language == "ru"
     if len(slides) < hi and not any(s.message.strip().lower() == "summary" for s in slides):
         slides.insert(len(slides) - 1, OutlineSlide(intent="text", title="Главное" if ru else "Key takeaways", message="summary"))
@@ -148,9 +149,10 @@ def _normalize_outline(o: Outline, brief: Brief) -> Outline:
 
 
 def complete_plan(plan: DeckPlan, n: int) -> None:
-    """Deterministic safety net after writing: a summary slide the writer left empty lists the
-    conclusions of the content slides, and a plan still short of the requested count (TZ: the
-    number of slides the user asked for) splits its longest lists into two slides."""
+    """Детерминированная страховка после написания текстов: пустой итоговый слайд получает список выводов
+    содержательных слайдов, а план, которому всё ещё не хватает слайдов до заданного числа (ТЗ: столько,
+    сколько попросил пользователь), делит самые длинные списки на два слайда.
+    """
     content = [s for s in plan.slides if s.intent.value in _CONTENT_INTENTS]
     for s in plan.slides:
         if "summary" in (s.notes or "") and not s.bullets and not s.items:
@@ -190,7 +192,7 @@ def _to_spec(i: int, o: OutlineSlide, w: WrittenSlide | None) -> SlideSpec:
         spec.quote, spec.quote_author = w.quote, w.quote_author
         spec.image_prompt = w.image_prompt
         spec.notes = (w.notes or "") + ("\n[summary]" if spec.notes == "summary" else "")
-    # consistency: intents that need data fall back gracefully
+    # согласованность: интенты, которым нужны данные, аккуратно откатываются к другим
     if intent == PatternKind.chart and not spec.chart:
         spec.intent = PatternKind.table if spec.table else (PatternKind.stats if spec.items else PatternKind.text)
     if intent == PatternKind.table and not spec.table:
@@ -210,8 +212,8 @@ def _to_spec(i: int, o: OutlineSlide, w: WrittenSlide | None) -> SlideSpec:
     return _keep_relevant(spec)
 
 
-# Fields a slide of each intent may carry. Weaker models tend to fill every field of the
-# schema; anything outside the intent would be silently dropped by the layout anyway.
+# Поля, которые может нести слайд каждого интента. Слабые модели склонны заполнять все поля
+# схемы; всё вне интента вёрстка всё равно молча отбросила бы.
 _RELEVANT = {
     PatternKind.title: set(), PatternKind.section: set(), PatternKind.thanks: set(),
     PatternKind.agenda: {"items"}, PatternKind.cards: {"items"}, PatternKind.steps: {"items"}, PatternKind.stats: {"items"},
@@ -227,7 +229,7 @@ _VALUE_OK = re.compile(r"^[<>~≈+\-−]?\s*[\d.,\s]+\s*(%|₽|\$|€|x|×|k|m|�
 
 
 def _clean_lines(items: list[str]) -> list[str]:
-    """One point per bullet: split embedded line breaks, drop manual numbering."""
+    """Один пункт — одна мысль: разбиваем встроенные переносы строк, убираем ручную нумерацию."""
     out = []
     for b in items:
         for line in re.split(r"\s*\n+\s*", b or ""):
@@ -242,7 +244,7 @@ def _keep_relevant(spec: SlideSpec) -> SlideSpec:
     for it in spec.items:
         it.title, it.text = _NUMBERED.sub("", it.title).strip(), it.text.strip()
         if it.value and not _VALUE_OK.match(it.value.strip()) and len(it.value) > 8:
-            # a phrase is not a KPI value: keep it as the item title instead
+            # фраза — не значение KPI: оставляем её заголовком элемента
             it.title, it.value = (f"{it.value} {it.title}".strip() if it.title else it.value), ""
     keep = _RELEVANT.get(spec.intent, {"bullets", "items", "chart", "table"})
     if "items" not in keep:
@@ -259,6 +261,7 @@ def _keep_relevant(spec: SlideSpec) -> SlideSpec:
 
 
 def _lang_ok(text: str, lang: str) -> bool:
+    """Текст на языке колоды (по доле букв нужного алфавита)."""
     letters = [ch for ch in text if ch.isalpha()]
     if len(letters) < 4:
         return True
@@ -266,7 +269,7 @@ def _lang_ok(text: str, lang: str) -> bool:
     return cyr >= 0.5 if lang == "ru" else cyr < 0.5
 
 
-# workflow words a model sometimes puts into a title instead of writing one (ru, en)
+# служебные слова, которые модель иногда ставит вместо заголовка (ru, en)
 _SERVICE_TITLES = {
     "summary": ("Главное", "Key takeaways"), "conclusion": ("Главное", "Key takeaways"),
     "conclusions": ("Главное", "Key takeaways"), "key takeaways": ("Главное", "Key takeaways"),
@@ -277,16 +280,17 @@ _CONTENT_INTENTS = {"text", "cards", "steps", "stats", "chart", "table", "image_
 
 
 def _service_title(title: str) -> bool:
+    """Заголовок — служебное слово вместо смысла («Слайд», «Заголовок»...)."""
     return re.sub(r"[^a-zа-яё ]+", "", title.lower()).strip() in _SERVICE_TITLES
 
 
 def _digits(text: str) -> set[str]:
-    """Normalised numbers of a text (same normalisation as the numbers audit)."""
+    """Нормализованные числа текста (та же нормализация, что в аудите чисел)."""
     return {re.sub(r"[^\d.]", "", normalize_number(m.group(0))).lstrip("0") for m in NUM_RE.finditer(text or "")}
 
 
 def _unsourced(text: str, known: set[str]) -> list[str]:
-    """Numbers of `text` (2+ digits, not years) that are not among `known`."""
+    """Числа из `text` (от 2 цифр, не годы), которых нет среди `known`."""
     out = []
     for m in NUM_RE.finditer(text or ""):
         d = re.sub(r"[^\d.]", "", normalize_number(m.group(0).strip()))
@@ -298,9 +302,10 @@ def _unsourced(text: str, known: set[str]) -> list[str]:
 
 
 def drop_unsourced(plan: DeckPlan, corpus: ContentCorpus, brief_text: str) -> int:
-    """Fact guard before layout: bullets and items with numbers that are not in the materials
-    (models invent plausible metrics) are dropped, as long as the slide keeps some content.
-    Returns the number of dropped lines; the numbers audit still reports what remains."""
+    """Фильтр фактов до вёрстки: пункты и элементы с числами, которых нет в материалах (модели придумывают
+    правдоподобные метрики), удаляются, если на слайде остаётся содержание. Возвращает число удалённых
+    строк; аудит чисел всё равно сообщает об оставшемся.
+    """
     known = {re.sub(r"[^\d.]", "", n).lstrip("0") for n in corpus.numbers} | _digits(brief_text)
     dropped = 0
     for s in plan.slides:
@@ -316,8 +321,9 @@ def drop_unsourced(plan: DeckPlan, corpus: ContentCorpus, brief_text: str) -> in
 
 
 def sanitize_plan(plan: DeckPlan, outline: Outline | None = None) -> DeckPlan:
-    """Deck-level guards against model slips: workflow words and wrong-language titles,
-    duplicate slides."""
+    """Проверки уровня колоды против промахов модели: служебные слова и заголовки на другом языке,
+    дублирующиеся слайды.
+    """
     seen: set[str] = set()
     out = []
     for i, s in enumerate(plan.slides):
@@ -328,7 +334,7 @@ def sanitize_plan(plan: DeckPlan, outline: Outline | None = None) -> DeckPlan:
             s.title = outline.slides[i].title
         key = re.sub(r"\W+", " ", s.title.lower()).strip()
         if key in seen and s.intent not in (PatternKind.title, PatternKind.thanks):
-            continue  # same claim twice: keep the first slide only
+            continue  # одно утверждение дважды: оставляем только первый слайд
         seen.add(key)
         out.append(s)
     for i, s in enumerate(out):
@@ -341,15 +347,15 @@ async def plan_with_llm(brief: Brief, corpus: ContentCorpus, profile: TemplatePr
     caps, title_chars = template_capabilities(profile)
     context = select_context(corpus, brief.text, budget_chars=16000)
     outline_skill = skill_for_step(agent, "outline", "outline")
-    hints = outline_skill.params.get("purpose_hints", {})  # lives in skills/outline/<ver>.yaml
-    lo = max(brief.n_slides, 3)  # fewer slides than asked -> one repair round
+    hints = outline_skill.params.get("purpose_hints", {})  # хранится в skills/outline/<версия>.yaml
+    lo = max(brief.n_slides, 3)  # слайдов меньше, чем просили -> один раунд исправления
 
     brief_stems = {w[:6] for w in re.findall(r"[a-zа-яё]{5,}", brief.text.lower())}
 
     cap = section_cap(brief.n_slides)
 
     def check_outline(o: Outline) -> str | None:
-        """All problems at once (a repair that fixes one must not break another), plus the count."""
+        """Все проблемы сразу (исправление одной не должно ломать другую) плюс требование к числу слайдов."""
         problems = []
         titles = [re.sub(r"\W+", " ", s.title.lower()).strip() for s in o.slides if s.title.strip()]
         distinct = len(set(titles))
@@ -394,7 +400,7 @@ async def plan_with_llm(brief: Brief, corpus: ContentCorpus, profile: TemplatePr
                 purpose=brief.purpose, outline=[x.model_dump() for x in o.slides], index=i + 1, slide=s.model_dump(),
                 context=wctx, title_chars=title_chars,
             )
-        except (LLMError, Exception) as e:  # one bad slide must not kill the deck
+        except (LLMError, Exception) as e:  # один неудачный слайд не должен ронять всю колоду
             log.warning("slide_writer failed for %d: %s", i + 1, e)
             return None
 
@@ -409,15 +415,16 @@ async def plan_with_llm(brief: Brief, corpus: ContentCorpus, profile: TemplatePr
     if agent.enabled("headlines"):
         try:
             await _headlines(plan, llm, agent, title_chars, brief.language)
-        except Exception as e:  # titles from the writer stay
+        except Exception as e:  # заголовки от автора текстов сохраняются
             log.warning("headlines step failed: %s", e)
     return plan
 
 
 async def _headlines(plan: DeckPlan, llm: LLMClient, agent: Agent, title_chars: int, language: str) -> None:
-    """One call rewrites the titles of content slides into conclusions drawn from their own
-    content (TZ Appendix 1, question 1). A new title is taken only if it keeps the language,
-    fits the budget and brings no number that the slide does not already contain."""
+    """Один вызов переписывает заголовки содержательных слайдов в выводы из их собственного содержимого (ТЗ,
+    Приложение 1, вопрос 1). Новый заголовок принимается, только если он на том же языке, укладывается в
+    бюджет и не приносит чисел, которых нет на слайде.
+    """
     targets = [(i, s) for i, s in enumerate(plan.slides) if s.intent.value in _CONTENT_INTENTS]
     if not targets:
         return
@@ -442,9 +449,9 @@ async def _headlines(plan: DeckPlan, llm: LLMClient, agent: Agent, title_chars: 
             keys.append(int(t.get("n", 0)))
         except (TypeError, ValueError):
             keys.append(0)
-    if keys and all(k in ns for k in keys):  # answered with slide numbers
+    if keys and all(k in ns for k in keys):  # ответ пронумерован номерами слайдов
         by_n = {k: str(t.get("title", "")).strip().rstrip(".") for k, t in zip(keys, got)}
-    elif len(got) == len(targets):  # numbered by position in the list instead
+    elif len(got) == len(targets):  # пронумерован позицией в списке
         by_n = {n: str(t.get("title", "")).strip().rstrip(".") for n, t in zip(ns, got)}
     else:
         by_n = {}
@@ -454,28 +461,30 @@ async def _headlines(plan: DeckPlan, llm: LLMClient, agent: Agent, title_chars: 
         if not new or new == s.title or len(new) > title_chars + 20 or not _lang_ok(new, language) or _service_title(new):
             continue
         if _unsourced(new, _digits(source[i])):
-            continue  # a headline must not bring numbers of its own
+            continue  # заголовок не должен приносить собственных чисел
         stems = {w[:5] for w in re.findall(r"[a-zа-яё]{5,}", source[i].lower())}
         if stems and not {w[:5] for w in re.findall(r"[a-zа-яё]{5,}", new.lower())} & stems:
-            continue  # shares no word with its slide: an answer meant for another slide
+            continue  # нет общих слов со своим слайдом: ответ предназначался другому слайду
         s.title = new
         changed += 1
     log.info("headlines: %d of %d titles rewritten as conclusions", changed, len(targets))
 
 
 # ----------------------------------------------------------------------------
-# Offline, deterministic planner
+# Офлайн-планировщик (детерминированный)
 # ----------------------------------------------------------------------------
 _HEAD_RE = re.compile(r"^\s*(\d+(\.\d+)*\.?\s+)?[A-ZА-ЯЁ][^.!?]{2,70}$")
 _BULLET_RE = re.compile(r"^\s*([•●▪\-–*]|\d+[.)])\s+")
 
 
 def _sentences(text: str) -> list[str]:
+    """Предложения текста подходящей длины (для экстрактивного плана)."""
     parts = re.split(r"(?<=[.!?;])\s+|\n", text)
     return [p.strip(" •●-–;") for p in parts if 25 <= len(p.strip()) <= 220]
 
 
 def _short(s: str, words: int = 14) -> str:
+    """Обрезает текст до `words` слов с многоточием."""
     w = s.split()
     return s if len(w) <= words else " ".join(w[:words]).rstrip(",;:") + "…"
 
@@ -486,7 +495,7 @@ _NUM_RE = re.compile(r"\d[\d.,]*(?:\s?[–-]\s?\d[\d.,]*)?(?:\s?(?:%|₽|(?:мл
 
 
 def _cut(s: str, n: int) -> str:
-    """At most n characters, cut at a word boundary (never mid-word)."""
+    """Не больше n символов, обрезка по границе слова (никогда посреди слова)."""
     s = s.strip()
     if len(s) <= n:
         return s
@@ -494,7 +503,7 @@ def _cut(s: str, n: int) -> str:
 
 
 def _brief_title(brief: Brief) -> tuple[str, str]:
-    """Cover title and subtitle from the brief's first phrase ('X — what it is')."""
+    """Заголовок и подзаголовок обложки из первой фразы брифа («X — что это такое»)."""
     text = brief.text.strip()
     first = re.split(r"(?<=[.!?])\s+|\n", text)[0] if text else ""
     head, sep, rest = first.partition(" — ")
@@ -506,19 +515,20 @@ def _brief_title(brief: Brief) -> tuple[str, str]:
 
 
 def plan_offline(brief: Brief, corpus: ContentCorpus) -> DeckPlan:
-    """Extractive fallback without a model: document sections become slides; the deck gets
-    the number of slides the user asked for (10-15 by default, TZ) by keeping the richest
-    sections or splitting long ones and adding key-number and summary slides built from
-    the same material. Nothing is invented."""
+    """Экстрактивный запасной вариант без модели: разделы документа становятся слайдами; колода получает
+    заданное пользователем число слайдов (по умолчанию 10–15, ТЗ): остаются самые насыщенные разделы или
+    длинные делятся, добавляются слайды ключевых чисел и итогов из того же материала. Ничего не
+    выдумывается.
+    """
     lines = [ln.rstrip() for c in corpus.chunks for ln in c.text.split("\n")]
     sections: list[tuple[str, list[str]]] = []
     cur_title, cur = None, []
     for ln in lines:
         s = ln.strip()
-        if not s or re.fullmatch(r"[|:\-\s]+", s):  # blank line / markdown table rule
+        if not s or re.fullmatch(r"[|:\-\s]+", s):  # пустая строка / разделитель таблицы markdown
             continue
         md_head = re.match(r"^#{1,6}\s+(.+)", s)
-        if s.startswith("|"):  # markdown table row -> "cell — cell"
+        if s.startswith("|"):  # строка таблицы markdown -> «ячейка — ячейка»
             s = " — ".join(c.strip() for c in s.strip("|").split("|") if c.strip())
         s = re.sub(r"[`*]{1,2}", "", md_head.group(1) if md_head else s)
         if md_head or (_HEAD_RE.match(s) and not _BULLET_RE.match(s) and len(s.split()) <= 9 and not s.endswith(":")):
@@ -534,30 +544,30 @@ def plan_offline(brief: Brief, corpus: ContentCorpus) -> DeckPlan:
         sections = [(_cut(sents[i * 4], 60), sents[i * 4 + 1:(i + 1) * 4] or sents[i * 4:i * 4 + 1])
                     for i in range(max(1, len(sents) // 4))] if sents else []
 
-    # slide units in document order: (title, lines, lines are bullets)
+    # единицы-слайды в порядке документа: (заголовок, строки, являются ли строки пунктами)
     units: list[list] = []
     for t, body in sections:
         bullets = [_BULLET_RE.sub("", b) for b in body if _BULLET_RE.match(b)]
         sents = bullets or _sentences(" ".join(body))
         if sents:
             units.append([t, [_short(x) for x in sents], bool(bullets)])
-    # TZ: 10-15 slides "or as many as the user asked for" -> the user's number wins
+    # ТЗ: 10–15 слайдов «или заданный пользователем» -> побеждает число пользователя
     target = min(max(brief.n_slides, 4), 20)
-    agenda = len(units) >= 3 and target >= 8  # a short deck spends no slide on contents
-    need = target - 2 - (1 if agenda else 0)  # cover, closing, agenda
-    if len(units) > need:  # richest sections, document order kept
+    agenda = len(units) >= 3 and target >= 8  # короткая колода не тратит слайд на содержание
+    need = target - 2 - (1 if agenda else 0)  # обложка, финал, содержание
+    if len(units) > need:  # самые насыщенные разделы, порядок документа сохраняется
         keep = sorted(sorted(range(len(units)), key=lambda i: -len(units[i][1]))[:need])
         units = [units[i] for i in keep]
     all_lines = [x for u in units for x in u[1]]
     numbers = [x for x in all_lines if re.search(r"\d", x)]
     extra = (1 if len(numbers) >= 3 else 0) + (1 if len(units) >= 3 else 0)
-    while len(units) + extra < need:  # split the longest section in two
+    while len(units) + extra < need:  # самый длинный раздел делится на два
         i = max(range(len(units)), key=lambda k: len(units[k][1]), default=None)
         if i is None or len(units[i][1]) < 4:
-            break  # not enough material left: fewer slides rather than invented ones
+            break  # материала не хватает: лучше меньше слайдов, чем выдуманные
         t, ls, b = units[i]
         half = (len(ls) + 1) // 2
-        # a list continues under its own heading; prose continues under its next sentence
+        # список продолжается под своим заголовком; текст — под следующим предложением
         second = [f"{_cut(t, 50)} (продолжение)", ls[half:], b] if b else [_cut(ls[half].rstrip("…"), 60), ls[half + 1:] or ls[half:], b]
         units[i:i + 1] = [[t, ls[:half], b], second]
 
@@ -593,6 +603,9 @@ def plan_offline(brief: Brief, corpus: ContentCorpus) -> DeckPlan:
 
 
 async def make_plan(brief: Brief, corpus: ContentCorpus, profile: TemplateProfile, llm: LLMClient, agent: Agent) -> tuple[DeckPlan, str]:
+    """План колоды: через модель, при её отсутствии или сбое — офлайн-планировщик. Возвращает (план,
+    источник).
+    """
     if llm.enabled:
         try:
             return await plan_with_llm(brief, corpus, profile, llm, agent), "llm"

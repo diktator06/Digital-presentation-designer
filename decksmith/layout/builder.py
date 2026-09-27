@@ -1,12 +1,12 @@
-"""Deck builder: applies layout decisions to a copy of the template.
+"""Сборщик колоды: применяет решения по вёрстке к копии шаблона.
 
-clone   : duplicate the example slide, shrink its repeater, map content to slots
-          by role, fit text in the template type scale, delete unused slots
-compose : new slide on the template's canvas layout (title placeholder kept),
-          native chart/table/diagram drawn in the content box found by CV
+clone   : копирует пример-слайд, сокращает повторитель, раскладывает контент по слотам
+          по ролям, вписывает текст по шкале кеглей шаблона, удаляет неиспользованные слоты
+compose : новый слайд на макете-«холсте» шаблона (плейсхолдер заголовка сохраняется),
+          нативные диаграмма/таблица/схема рисуются в зоне контента, найденной CV
 
-Nothing from the example slide survives unless it is either filled with new
-content or is pure decoration (so no "Заголовок"/"Lorem ipsum" leftovers).
+От слайда-примера не остаётся ничего, кроме заполненного новым контентом и чистого
+оформления (поэтому никаких «Заголовок»/«Lorem ipsum»).
 """
 from __future__ import annotations
 
@@ -83,11 +83,12 @@ class BuildReport:
 
 
 def _layouts(prs):
+    """Все макеты всех мастеров презентации."""
     return [layout for m in prs.slide_masters for layout in m.slide_layouts]
 
 
 def _is_decorative_picture(shape) -> bool:
-    """Transparent PNG art (3D objects, blobs) is brand decoration; opaque photos are content."""
+    """Прозрачная PNG-графика (3D-объекты, пятна) — оформление бренда; непрозрачные фото — контент."""
     try:
         blob = shape.image.blob
         im = Image.open(io.BytesIO(blob))
@@ -100,6 +101,7 @@ def _is_decorative_picture(shape) -> bool:
 
 
 def number_format(sample: str, i: int) -> str | None:
+    """Номер элемента в формате образца шаблона («01» или «1»); None, если образец — не номер."""
     s = sample.strip()
     if re.fullmatch(r"0\d", s):
         return f"{i + 1:02d}"
@@ -110,6 +112,7 @@ def number_format(sample: str, i: int) -> str | None:
 
 class DeckBuilder:
     def __init__(self, profile: TemplateProfile, variant: Variant):
+        """Открывает шаблон и готовит индексы макетов и слайдов-примеров."""
         self.profile = profile
         self.variant = variant
         self.prs = Presentation(profile.file)
@@ -123,10 +126,11 @@ class DeckBuilder:
         self._clear_prompt_texts()
 
     def _clear_prompt_texts(self) -> None:
-        """Sample text inside layout/master placeholders ("Click to edit", "Образец текста") is a
-        prompt, not design. Some renderers (LibreOffice) draw it on every slide of that layout, so it
-        is blanked in the output deck; runs/paragraphs stay, so inherited formatting is unchanged.
-        Footer, date and slide-number placeholders keep their content."""
+        """Образец текста в плейсхолдерах макета/мастера («Click to edit», «Образец текста») — подсказка, а не
+        дизайн. Некоторые рендеры (LibreOffice) рисуют его на каждом слайде этого макета, поэтому в
+        выходной колоде он очищается; раны и абзацы остаются, так что унаследованное форматирование не
+        меняется. Плейсхолдеры колонтитула, даты и номера слайда сохраняют содержимое.
+        """
         keep = {"FOOTER", "DATE", "SLIDE_NUMBER"}
         for container in list(self.prs.slide_masters) + self.layouts:
             for ph in container.placeholders:
@@ -138,7 +142,7 @@ class DeckBuilder:
                 for t in ph._element.iter(qn("a:t")):
                     t.text = ""
 
-    # ------------------------------------------------------------------ public
+    # ------------------------------------------------------------------ публичные методы
     def build(self, plan: DeckPlan, decisions: list[SlideLayout], images: dict[str, str] | None = None,
               icons: dict[str, list[str | None]] | None = None) -> BuildReport:
         images = images or {}
@@ -154,7 +158,8 @@ class DeckBuilder:
                     self._fill_clone(slide, n, pat, spec, d, plan, images.get(spec.id), icons.get(spec.id))
                 else:
                     slide = self._compose(n, spec, d.compose_kind or "bullets", images.get(spec.id), icons.get(spec.id))
-            except Exception as e:  # never lose a slide: drop the half-built one, fall back to a composed list
+            # слайд не теряется никогда: полусобранный удаляется, вместо него собирается список
+            except Exception as e:
                 log.exception("slide %s failed (%s), falling back", spec.id, e)
                 if len(self.prs.slides) > before:
                     delete_slides(self.prs, list(range(before, len(self.prs.slides))))
@@ -162,7 +167,7 @@ class DeckBuilder:
                 d.rationale += f" | fallback after error: {e}"
             if spec.notes:
                 slide.notes_slide.notes_text_frame.text = spec.notes
-            for fld in slide._element.iter(qn("a:fld")):  # cached page numbers of cloned examples
+            for fld in slide._element.iter(qn("a:fld")):  # кэш номеров страниц у скопированных примеров
                 if fld.get("type") == "slidenum" and fld.find(qn("a:t")) is not None:
                     fld.find(qn("a:t")).text = str(n + 1)
             source = None
@@ -178,37 +183,38 @@ class DeckBuilder:
         return self.report
 
     def save(self, path: str | Path) -> Path:
+        """Сохраняет колоду."""
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         self.prs.save(str(path))
         return path
 
-    # ------------------------------------------------------------------ clone
+    # ------------------------------------------------------------------ клонирование
     def _clone(self, pat: Pattern):
+        """Новый слайд из слайда-примера или макета паттерна."""
         if pat.source == "slide" and pat.slide_index is not None:
             return duplicate_slide(self.prs, self.src[pat.slide_index])
         return self._slide_from_layout(self.layouts[pat.layout_index])
 
     def _slide_from_layout(self, layout):
-        """New slide whose placeholders carry explicit layout geometry.
-
-        Some producers write every placeholder with the same idx (e.g. idx=0), so
-        inheritance-by-idx would give the body the title's frame; pinning the
-        geometry of each placeholder's own layout counterpart removes the ambiguity.
-        Brand furniture repeated on the template's examples is copied on as well."""
+        """Новый слайд, у плейсхолдеров которого явно задана геометрия макета. Некоторые программы записывают
+        все плейсхолдеры с одним idx (например, idx=0), и наследование по idx дало бы основному тексту
+        рамку заголовка; фиксация геометрии пары каждого плейсхолдера в макете снимает неоднозначность.
+        Бренд-элементы, повторяющиеся на примерах шаблона, тоже переносятся.
+        """
         import copy as _copy
 
         slide = self.prs.slides.add_slide(layout)
         cloneable = list(layout.iter_cloneable_placeholders())
         sw, sh_ = self.profile.tokens.slide_w, self.profile.tokens.slide_h
         pad = int(0.01 * sw)
-        # both sides in document order (slide.placeholders is sorted by idx, the clones are not)
+        # обе стороны в порядке документа (slide.placeholders отсортированы по idx, копии — нет)
         for sph, lph in zip([s for s in slide.shapes if s.is_placeholder], cloneable):
             try:
                 x, y, w, h = lph.left, lph.top, lph.width, lph.height
                 if None in (x, y, w, h):
                     continue
-                # our text goes into these frames: keep them on the slide even if the layout bleeds
+                # в эти рамки идёт наш текст: оставляем их на слайде, даже если макет выходит за край
                 x, y = max(int(x), 0), max(int(y), 0)
                 w = min(int(w), sw - x - pad) if x + int(w) > sw else int(w)
                 h = min(int(h), sh_ - y - pad) if y + int(h) > sh_ else int(h)
@@ -225,14 +231,14 @@ class DeckBuilder:
                 el = _copy.deepcopy(src_shape._element)
                 cnv = el.find(".//" + qn("p:cNvPr"))
                 if cnv is not None:
-                    cnv.set("id", str(slide.shapes._next_shape_id))  # unique id on the new slide
+                    cnv.set("id", str(slide.shapes._next_shape_id))  # уникальный id на новом слайде
                 slide.shapes._spTree.append(el)
         return slide
 
     def _clear_title_box(self, layout_index: int | None, box: Box) -> Box | None:
-        """Title frame shortened to end before background art that the layout draws inside
-        the title band (a logo strip baked into the background, corner graphics).
-        None when the frame is already clear or is not in that band."""
+        """Рамка заголовка, укороченная до фоновой графики, которую макет рисует в полосе заголовка (полоса
+        логотипов в фоне, угловая графика). None, если рамка уже свободна или не в этой полосе.
+        """
         layouts = self.profile.layouts
         if layout_index is None or not 0 <= layout_index < len(layouts):
             return None
@@ -240,13 +246,15 @@ class DeckBuilder:
 
     def _shape(self, slide, pat: Pattern, slot: Slot):
         if pat.source == "layout":
-            # placeholders inherit layout geometry: match by idx when unique, else by position
+            # плейсхолдеры наследуют геометрию макета: сопоставление по idx, если он уникален, иначе по
+            # положению
             phs = list(slide.placeholders)
             by_idx = [ph for ph in phs if ph.placeholder_format.idx == slot.placeholder_idx]
             if len(by_idx) == 1:
                 return by_idx[0]
 
             def dist(ph):
+                """Расстояние между плейсхолдером и рамкой слота."""
                 try:
                     return abs(ph.left - slot.box.x) + abs(ph.top - slot.box.y) + abs(ph.width - slot.box.w) + abs(ph.height - slot.box.h)
                 except TypeError:
@@ -265,7 +273,7 @@ class DeckBuilder:
             sh = shape_by_id(slide, sid)
             if sh is not None:
                 delete_shape(sh)
-        # redistribute the remaining items over the original span (top-level shapes only)
+        # оставшиеся элементы распределяются по исходной ширине (только фигуры верхнего уровня)
         boxes = rep.item_boxes
         if rep.direction not in ("row", "column") or keep < 1:
             return
@@ -300,7 +308,8 @@ class DeckBuilder:
         keep = d.keep_items if d.keep_items else (rep.n_items if rep else 0)
         if rep and keep < rep.n_items:
             self._reduce_repeater(slide, pat, keep)
-        is_cover = spec.intent == PatternKind.title  # a cover pattern reused for a divider keeps the divider's text
+        # шаблон обложки, взятый для разделителя, сохраняет текст разделителя
+        is_cover = spec.intent == PatternKind.title
         body_queue: list[str] = list(spec.bullets) if not rep else []
         free_numbers = [s for s in pat.slots if s.role == SlotRole.number and s.item_index is None]
         free_texts_for_numbers = items[len([1 for _ in range(keep)]):] if rep else items
@@ -308,13 +317,13 @@ class DeckBuilder:
         fills: dict[str, tuple[list[str], list[int] | None]] = {}
         body_slots = sorted([s for s in pat.slots if s.role == SlotRole.body and s.item_index is None], key=lambda s: (s.box.y, s.box.x))
 
-        # which text slots does each item offer? (to pack title+text when only one exists)
+        # какие текстовые слоты есть у элемента? (чтобы упаковать заголовок и текст, если слот один)
         item_text_slots: dict[int, list[Slot]] = {}
         for s in pat.slots:
             if s.kind == "text" and s.item_index is not None and s.role not in (SlotRole.number, SlotRole.label):
                 item_text_slots.setdefault(s.item_index, []).append(s)
         is_quote = pat.kind == PatternKind.quote and bool(spec.quote)
-        # items with values (KPI) on a pattern without a number slot keep the value in their title
+        # у элементов со значениями (KPI) на шаблоне без слота числа значение остаётся в заголовке
         self._inline_values = not any(s.role == SlotRole.number and s.item_index is not None for s in pat.slots) and not any(
             s.para_roles and s.para_roles[0] == SlotRole.number for s in pat.slots)
         used_item_roles: set[tuple[int, str]] = set()
@@ -322,7 +331,7 @@ class DeckBuilder:
         used_texts: set[str] = set()
 
         def once(txt: str) -> str:
-            """Each piece of free text lands on the slide at most once."""
+            """Каждый фрагмент свободного текста попадает на слайд не больше одного раза."""
             if not txt or txt in used_texts:
                 return ""
             used_texts.add(txt)
@@ -339,7 +348,7 @@ class DeckBuilder:
                     continue
                 key = (slot.item_index, slot.role.value if not slot.para_roles else "composite")
                 if key in used_item_roles:
-                    continue  # e.g. timeline text duplicated above/below the axis
+                    continue  # например, текст таймлайна, продублированный над и под осью
                 used_item_roles.add(key)
                 only = len(item_text_slots.get(slot.item_index, [])) == 1 and not slot.para_roles
                 if only and slot.role not in (SlotRole.number, SlotRole.label) and it.title and it.text:
@@ -347,7 +356,8 @@ class DeckBuilder:
                     self._bold_first.add(slot.id)
                 else:
                     paras, tidx = self._item_text(slot, it, slot.item_index)
-                    # an item without a title must not show its text twice (title slot + text slot)
+                    # элемент без заголовка не должен показывать свой текст дважды (слот заголовка + слот
+                    # текста)
                     item_seen = used_item_texts.setdefault(slot.item_index, set())
                     if paras and all(p in item_seen for p in paras if p):
                         continue
@@ -367,13 +377,13 @@ class DeckBuilder:
             elif role == SlotRole.number and stat_units:
                 it = stat_units.pop(0)
                 fills[slot.id] = ([it.value or it.title], None)
-                # pair with nearest caption-like text slot below the number
+                # пара — ближайший подписеподобный текстовый слот под числом
                 cap = self._nearest_below(slot, pat, fills)
                 if cap is not None and (it.text or it.title):
                     fills[cap.id] = ([it.text or it.title], None)
             elif role == SlotRole.body:
                 if slot.para_roles:
-                    # composite box: styled lead paragraph + body paragraphs
+                    # составная рамка: оформленный ведущий абзац + абзацы основного текста
                     rest = list(body_queue[: self.variant.max_bullets]) if body_queue else ([m] if (m := once(spec.message)) else [])
                     head = once(spec.subtitle) if rest else ""
                     if body_queue:
@@ -383,7 +393,7 @@ class DeckBuilder:
                         fills[slot.id] = (paras, ([0] if head else []) + [1] * len(rest))
                     continue
                 if len(body_slots) > 1 and body_queue:
-                    # distribute bullets across several body boxes in reading order
+                    # пункты распределяются по нескольким рамкам основного текста в порядке чтения
                     k = body_slots.index(slot)
                     per = -(-len(spec.bullets) // len(body_slots))
                     chunk = spec.bullets[k * per:(k + 1) * per]
@@ -406,7 +416,7 @@ class DeckBuilder:
                 if once(spec.quote_author):
                     fills[slot.id] = ([spec.quote_author], None)
 
-        # quote layouts without a title slot: the quote goes to the largest text frame
+        # макеты цитаты без слота заголовка: цитата идёт в самую большую текстовую рамку
         if is_quote and not any(spec.quote in paras for paras, _ in fills.values()):
             frames = sorted([s for s in pat.slots if s.kind == "text" and s.role != SlotRole.decor and s.item_index is None],
                             key=lambda s: -s.box.area)
@@ -416,8 +426,8 @@ class DeckBuilder:
                 if displaced and spec.quote_author in displaced[0] and len(frames) > 1:
                     fills[frames[1].id] = ([spec.quote_author], None)
 
-        # a divider's or closing slide's lead line (the call to action of a pitch) goes to a free
-        # caption-like frame when the example has no subtitle frame, instead of being lost
+        # ведущая строка разделителя или финального слайда (призыв к действию в питче) идёт в свободную
+        # подписеподобную рамку, если у примера нет рамки подзаголовка, — вместо того чтобы потеряться
         lead = spec.message or spec.subtitle
         lead_slot = None
         if spec.intent in (PatternKind.section, PatternKind.thanks) and lead and lead not in used_texts:
@@ -428,8 +438,8 @@ class DeckBuilder:
                 fills[spare[0].id] = ([once(lead)], None)
                 lead_slot = spare[0]
 
-        # a content slide's lead line that found no subtitle frame goes to a free note frame that sits
-        # on a plate (a takeaway band of the example) rather than leaving the band empty
+        # ведущая строка содержательного слайда, не нашедшая рамки подзаголовка, идёт в свободную рамку
+        # примечания на плашке (полоса-вывод примера), а не оставляет полосу пустой
         lead = spec.subtitle or spec.message
         if spec.intent not in (PatternKind.title, PatternKind.section, PatternKind.thanks, PatternKind.quote) and lead \
                 and lead not in used_texts:
@@ -441,7 +451,7 @@ class DeckBuilder:
             if notes:
                 fills[notes[0].id] = ([once(lead)], None)
 
-        # apply text (fitted at the end)
+        # применяем текст (подгонка — в конце)
         deleted: set[str] = set()
         placed: list[tuple[Slot, object, list[str], list[int] | None]] = []
         for slot in pat.slots:
@@ -464,7 +474,7 @@ class DeckBuilder:
                 if runs:
                     runs[0].font.bold = True
             placed.append((slot, sh, paras, tidx))
-        # pictures
+        # картинки
         pics = [s for s in pat.slots if s.kind == "picture" and (s.item_index is None or s.item_index < keep)]
         content_pics = sorted([s for s in pics if s.role == SlotRole.image], key=lambda s: -s.box.area)
         used_image = False
@@ -483,7 +493,7 @@ class DeckBuilder:
                 except Exception as e:
                     log.warning("image replace failed: %s", e)
             if getattr(sh, "is_placeholder", False) and sh.shape_type != 13:
-                delete_shape(sh)  # empty picture placeholder
+                delete_shape(sh)  # пустой плейсхолдер картинки
                 deleted.add(slot.id)
             elif not _is_decorative_picture(sh):
                 delete_shape(sh)
@@ -497,7 +507,7 @@ class DeckBuilder:
                         replace_picture(slide, sh, ic, mode="contain")
                     except Exception:
                         pass
-        # frames/avatars that only served a removed slot go too
+        # рамки и аватары, служившие только удалённому слоту, тоже удаляются
         keep_ids = {s.shape_id for s in pat.slots if s.id not in deleted}
         by_container: dict[int, list[str]] = {}
         for sid, cids in pat.containers.items():
@@ -511,14 +521,14 @@ class DeckBuilder:
                 if sh is not None:
                     delete_shape(sh)
         self._drop_empty_plates(slide, [s.box for s in pat.slots if s.id in deleted and s.kind == "text"])
-        # a speaker frame that now carries a lead line loses the avatar next to it
+        # рамка спикера, получившая ведущую строку, теряет соседний аватар
         if lead_slot is not None and lead_slot.role == SlotRole.person:
             for cid in pat.containers.get(lead_slot.id, []):
                 sh = shape_by_id(slide, cid)
                 if sh is not None and sh.width is not None and not Box(
                         x=int(sh.left), y=int(sh.top), w=int(sh.width), h=int(sh.height)).contains(lead_slot.box, tol=12700):
                     delete_shape(sh)
-        # native tables / charts of the example: refill with our data in the template's style
+        # нативные таблицы и диаграммы примера: заполняются нашими данными в стиле шаблона
         t = self.profile.tokens
         for slot in [s for s in pat.slots if s.kind in ("table", "chart")]:
             sh = self._shape(slide, pat, slot)
@@ -535,35 +545,37 @@ class DeckBuilder:
                 if slot.kind == "chart" and spec.chart and spec.chart.series:
                     fill_chart(sh, spec.chart.categories[:8], [(s.name, s.values) for s in spec.chart.series], spec.chart.unit)
                     continue
-            except Exception as e:  # unusual chart/table XML: draw natively in the same box instead
+            except Exception as e:  # необычный XML диаграммы/таблицы: рисуем нативно в той же рамке
                 log.warning("native refill failed (%s), redrawing", e)
             box = slot.box
             if slot.kind == "table" and not any(o.box.y >= box.b and min(o.box.r, box.r) > max(o.box.x, box.x)
                                                 for o in pat.slots if o is not slot and o.kind != "picture"):
-                box = Box(x=box.x, y=box.y, w=box.w, h=max(box.h, t.slide_h - t.margins.bottom - box.y))  # nothing below
+                # ниже ничего нет
+                box = Box(x=box.x, y=box.y, w=box.w, h=max(box.h, t.slide_h - t.margins.bottom - box.y))
             delete_shape(sh)
             st = self._style_for(slide_bg=self.profile.tokens.background_hex)
             if slot.kind == "chart" and spec.chart:
                 C.draw_chart(slide, box, spec.chart, st)
             elif table:
                 C.draw_table(slide, box, table, st)
-        # leftover empty placeholders (python-pptx adds none for clones, layouts may keep some)
+        # оставшиеся пустые плейсхолдеры (у копий python-pptx их не добавляет, макеты могут оставить)
         for ph in list(slide.placeholders):
             if ph.has_text_frame and not ph.text_frame.text.strip():
                 delete_shape(ph)
-        # fit the text last: a frame may grow into room that unused slots left free
+        # текст подгоняется последним: рамка может вырасти в место, освобождённое неиспользованными слотами
         for slot, sh, paras, tidx in placed:
             fit_slot = slot
             if slot.role == SlotRole.title and slot.item_index is None:
                 clear = self._clear_title_box(pat.layout_index, slot.box)
                 if clear is not None:
-                    x, y, h = sh.left, sh.top, sh.height  # pin all four: placeholders may inherit
+                    # фиксируем все четыре: плейсхолдеры могут наследовать
+                    x, y, h = sh.left, sh.top, sh.height
                     sh.left, sh.top, sh.width, sh.height = x, y, clear.w, h
                     fit_slot = slot.model_copy(update={"box": clear})
             owned = owned_height(slot, [o for o, *_ in placed])
             if owned < fit_slot.box.h and slot.role in (SlotRole.title, SlotRole.subtitle):
-                # a one-line title frame of the example with the subtitle right under its first line:
-                # a longer title keeps to the part of the frame above the next filled frame
+                # однострочная рамка заголовка примера с подзаголовком прямо под первой строкой:
+                # более длинный заголовок держится в части рамки над следующей заполненной рамкой
                 b = fit_slot.box
                 fit_slot = fit_slot.model_copy(update={"box": Box(x=b.x, y=b.y, w=b.w, h=owned)})
                 x, y, w = sh.left, sh.top, sh.width
@@ -575,9 +587,10 @@ class DeckBuilder:
                 self._ensure_contrast(sh, slot, pat)
 
     def _ensure_contrast(self, sh, slot: Slot, pat: Pattern) -> None:
-        """A slot whose own colour is unreadable on what the template renders under it
-        (below 3:1, e.g. a purple heading on a purple card) gets the most readable of the
-        template's text colours. Moderate cases stay as designed; the audit reports them."""
+        """Слот, собственный цвет которого нечитаем на том, что шаблон рисует под ним (ниже 3:1, например
+        фиолетовый заголовок на фиолетовой карточке), получает самый читаемый из текстовых цветов шаблона.
+        Умеренные случаи остаются как задумано; о них сообщает аудит.
+        """
         col = slot.style.color_hex
         if not col or not pat.thumbnail or not Path(pat.thumbnail).exists():
             return
@@ -589,7 +602,7 @@ class DeckBuilder:
             except Exception:
                 self._bg_cache[key] = None
         bg = self._bg_cache[key]
-        if bg is None or contrast_ratio(col, bg) >= 3.0:  # WCAG minimum for large text
+        if bg is None or contrast_ratio(col, bg) >= 3.0:  # минимум WCAG для крупного текста
             return
         own = [s.style.color_hex for s in pat.slots if s.style.color_hex and s.style.color_hex != col]
         cands = own + [self.profile.tokens.text_hex] + [c.hex for c in self.profile.tokens.palette[:8]]
@@ -605,13 +618,14 @@ class DeckBuilder:
                 rpr.remove(old_fill)
             fill = etree.Element(qn("a:solidFill"))
             etree.SubElement(fill, qn("a:srgbClr")).set("val", best)
-            # schema order: ln? then fills before effects/latin/ea/cs
+            # порядок схемы: ln?, затем заливки до effects/latin/ea/cs
             ln = rpr.find(qn("a:ln"))
             rpr.insert(list(rpr).index(ln) + 1 if ln is not None else 0, fill)
 
     def _fit_backdrop(self, slide, backdrop_id: int, sh, slot: Slot, paras: list[str]) -> None:
-        """Resize the badge behind a title to the new text: same padding as in the example,
-        never wider than the (clear) title frame."""
+        """Подгоняет плашку под заголовком под новый текст: те же отступы, что в примере, но не шире
+        (свободной) рамки заголовка.
+        """
         bd = shape_by_id(slide, backdrop_id)
         if bd is None or bd.width is None:
             return
@@ -622,10 +636,11 @@ class DeckBuilder:
         x0, pad = int(bd.left), max(int(sh.left) - int(bd.left), 0)
         right = min(int(sh.left) + m.width_emu + pad, slot.box.r + pad)
         bd.width = max(right - x0, 2 * pad + int(0.05 * self.profile.tokens.slide_w))
-        if m.lines > 1:  # a wrapped title keeps its plate under every line
+        if m.lines > 1:  # у заголовка в несколько строк плашка остаётся под каждой строкой
             bd.height = max(int(bd.height), m.height_emu + 2 * max(int(sh.top) - int(bd.top), 0))
 
     def _nearest_below(self, num: Slot, pat: Pattern, fills) -> Slot | None:
+        """Ближайший свободный текстовый слот под номером элемента (для подписи к номеру)."""
         best, bd = None, None
         for s in pat.slots:
             if s.kind != "text" or s.id in fills or s.role in (SlotRole.title, SlotRole.number) or s.item_index is not None:
@@ -640,12 +655,13 @@ class DeckBuilder:
         return best
 
     def _head(self, it: Item) -> str:
-        """Item heading; the value leads it when the pattern has nowhere else to show numbers."""
+        """Заголовок элемента; значение идёт первым, если в паттерне больше негде показать числа."""
         if it.value and it.title and self._inline_values:
             return f"{it.value} {it.title}"
         return it.title or it.value
 
     def _item_text(self, slot: Slot, it: Item, i: int) -> tuple[list[str], list[int] | None]:
+        """Текст элемента для слота (с учётом ролей абзацев составной рамки) и индексы стилей."""
         if slot.para_roles:
             head_role = slot.para_roles[0]
             if head_role == SlotRole.number:
@@ -668,8 +684,9 @@ class DeckBuilder:
         return ([it.text or it.title], None)
 
     def _drop_empty_plates(self, slide, removed: list[Box]) -> None:
-        """A plate of the example that framed only texts removed now (a note band, a callout)
-        would stay as an empty coloured area: it goes too. Plates still carrying anything stay."""
+        """Плашка примера, обрамлявшая только удалённые теперь тексты (полоса примечания, выноска), осталась
+        бы пустой цветной областью: удаляется и она. Плашки, на которых что-то осталось, сохраняются.
+        """
         if not removed:
             return
         t = self.profile.tokens
@@ -688,7 +705,7 @@ class DeckBuilder:
             delete_shape(sh)
 
     def _brand_zones(self, slide) -> list[Box]:
-        """Logo / footer / page-number zones the slide's layout and master draw."""
+        """Зоны логотипа, колонтитула и номера страницы, которые рисуют макет и мастер слайда."""
         li = next((l.index for l, lay in zip(self.profile.layouts, self.layouts) if lay is slide.slide_layout), None)
         if li is None:
             return []
@@ -701,34 +718,34 @@ class DeckBuilder:
             return
         size = slot.style.size or self.profile.tokens.type_scale.body
         font = slot.style.font or self.profile.tokens.body_font
-        # titles must stay inside their own frame (they sit right above content);
-        # other auto-growing boxes may use the free room below them
+        # заголовки должны оставаться в своей рамке (они стоят прямо над контентом);
+        # другие растущие рамки могут занимать свободное место под собой
         if slot.role in (SlotRole.title, SlotRole.subtitle) or not slot.autofit:
             avail_h = slot.box.h
         else:
             avail_h = max(slot.box.h, int(slot.max_lines * size * 1.2 * EMU_PT + 91440))
-        # other frames grow inside their block before the type shrinks (organisers' clarification)
+        # остальные рамки растут внутри своего блока до уменьшения кегля (разъяснение организаторов)
         room = None
         if slot.role not in (SlotRole.title, SlotRole.subtitle) and not slot.painted:
             room = text_room(slide, sh, self.profile.tokens, owned_h=slot.box.h, keep_clear=self._brand_zones(slide))
         if room is not None:
             avail_h = max(slot.box.h, min(avail_h, room[2] - room[1]) if slot.autofit else room[2] - room[1])
         box_w = slot.box.w
-        # paragraph spacing and line spacing of the frame take their share of the height
+        # интервалы между абзацами и межстрочный интервал занимают свою долю высоты
         styles = paragraph_styles(slide, sh)[1]
         gaps, line = spacing(styles)
         if styles and styles[0].size and not slot.para_roles and abs(styles[0].size - size) > 0.5:
-            # the frame renders at its inherited size: an example's autofit scale does not carry over
+            # рамка рисуется унаследованным кеглем: масштаб автоподбора примера не переносится
             size = styles[0].size
         fit_h = max(int((avail_h - gaps * EMU_PT - 2 * DEFAULT_INSET_TB) / line) + 2 * DEFAULT_INSET_TB, int(avail_h * 0.3))
         if slot.para_roles:
-            # multi-style box (a big lead over body text): the paragraphs keep the example's roles;
-            # the lead gives way first (down to 1.2x the body), then all shrink by one factor
+            # рамка с несколькими стилями (крупный лид над основным текстом): абзацы сохраняют роли примера;
+            # сначала уступает лид (до 1.2× основного текста), затем всё уменьшается одним множителем
             sizes = [ps.size or size for ps in slot.para_styles] or [size]
             tidx = tidx or [0] + [1] * (len(paras) - 1)
             psizes = [sizes[min(i, len(sizes) - 1)] for i in tidx]
             if len(styles) == len(paras) and all(st.size for st in styles):
-                psizes = [st.size for st in styles]  # as rendered: an example's autofit scale does not carry over
+                psizes = [st.size for st in styles]  # как рисуется: масштаб автоподбора примера не переносится
             heads = [i for i, t in enumerate(tidx) if t == 0]
             body = min((s for s, t in zip(psizes, tidx) if t != 0), default=0)
             fh = 1.0
@@ -749,7 +766,8 @@ class DeckBuilder:
             return
         ts = self.profile.tokens.type_scale
         allowed = ts.sizes
-        # oversized placeholder defaults (e.g. 32 pt body) may shrink down to the template body size
+        # раздутые кегли плейсхолдеров по умолчанию (например, 32 pt в основном тексте) могут уменьшаться до
+        # кегля текста шаблона
         floor_ratio = 0.7 if size <= 1.3 * ts.body else max(ts.body * 0.85 / size, 0.35)
         if slot.role == SlotRole.title:
             floor_ratio = min(floor_ratio, 0.6)
@@ -764,8 +782,9 @@ class DeckBuilder:
         if room is not None:
             grow_frame(sh, room, text_height(slide, sh, box_w, font))
 
-    # ---------------------------------------------------------------- compose
+    # ---------------------------------------------------------------- компоновка
     def _canvas(self) -> tuple[int, bool]:
+        """Макет-холст для композиции варианта: (индекс макета, тёмный ли он)."""
         prof = self.profile
         tone = self.variant.tone
         if tone == "auto":
@@ -776,7 +795,7 @@ class DeckBuilder:
         return idx, prof.layouts[idx].dark
 
     def _region_colors(self, layout_info, region: Box | None) -> list[str]:
-        """Colours the layout renders under `region` (several for gradients and glows)."""
+        """Цвета, которые макет рисует под `region` (несколько — для градиентов и свечений)."""
         if region is None or not layout_info.thumbnail or not Path(layout_info.thumbnail).exists():
             return []
         try:
@@ -785,11 +804,14 @@ class DeckBuilder:
             return []
 
     def _style_for(self, slide_bg: str, samples: list[str] | None = None) -> C.Style:
+        """Стиль композиции для фона слайда."""
         return C.Style(tokens=self.profile.tokens, bg=slide_bg, dark=rel_luminance(slide_bg) < 0.4,
                        bg_samples=tuple(samples or ()))
 
     def _title_style(self):
-        """Dominant title style of the template's content examples (for layouts without a title placeholder)."""
+        """Преобладающий стиль заголовка в содержательных примерах шаблона (для макетов без плейсхолдера
+        заголовка).
+        """
         from collections import Counter
 
         styles = Counter()
@@ -802,8 +824,9 @@ class DeckBuilder:
         return styles.most_common(1)[0][0] if styles else (None, None, False, None)
 
     def _compose_section(self, spec: SlideSpec, plan_title: str | None = None):
-        """Divider / closing slide when the template has no such example: large title on the
-        canvas layout, accent rule, subtitle — all in template tokens."""
+        """Разделитель или финальный слайд, если в шаблоне нет такого примера: крупный заголовок на
+        макете-«холсте», акцентная линия, подзаголовок — всё в токенах шаблона.
+        """
         t = self.profile.tokens
         idx, _ = self._canvas()
         layout_info = self.profile.layouts[idx]
@@ -812,7 +835,8 @@ class DeckBuilder:
             delete_shape(ph)
         bg = layout_info.content_bg_hex or layout_info.background_hex or t.background_hex
         m = t.margins
-        # the divider sits in the layout's free area found by CV (clear of background art), else mid-slide
+        # разделитель ставится в свободную зону макета, найденную CV (вне фоновой графики), иначе посередине
+        # слайда
         region = Box(x=m.left, y=int(0.18 * t.slide_h), w=t.slide_w - m.left - m.right, h=int(0.7 * t.slide_h))
         cb = layout_info.content_box
         if cb is not None and cb.area >= 0.15 * t.slide_w * t.slide_h:
@@ -868,7 +892,8 @@ class DeckBuilder:
             tb = self._clear_title_box(idx, tb) or tb
             font, size, bold, color = self._title_style()
             font, size = font or t.heading_font, size or t.type_scale.title
-        # the title must fit its own frame: overflowing titles grow over content or off the slide
+        # заголовок должен помещаться в свою рамку: переполненный заголовок наезжает на контент или уходит за
+        # слайд
         fitted = fit_font_size([spec.title], font, size, tb.w, tb.h, bold, 0.6, allowed)
         overflow = fitted is None
         if overflow:
@@ -884,38 +909,39 @@ class DeckBuilder:
                              fit=False, name="Title")
             anchor_bottom = False
             title_id = shp.shape_id
-        if overflow:  # shortened by the LLM step (shortener skill) when a model is configured
+        if overflow:  # сокращается шагом LLM (скилл shortener), если модель подключена
             self.report.overflows.append(Overflow(slide=n, shape_id=title_id, role="title", paragraphs=[spec.title],
                                                   budget=max_chars_for(tb.w, tb.h, font, fitted, bold)))
         need = measure([spec.title], font, fitted, tb.w, bold).height_emu
         title_bottom = tb.b if anchor_bottom else max(tb.b, min(tb.y + need, tb.b + need // 2))
-        if title_bottom > tb.b:  # the content below starts under the title's last line: its frame may grow there
+        # контент ниже начинается под последней строкой заголовка: рамка может вырасти туда
+        if title_bottom > tb.b:
             title_sh = shape_by_id(slide, title_id)
             if title_sh is not None:
                 title_sh.left, title_sh.top, title_sh.width, title_sh.height = tb.x, tb.y, tb.w, title_bottom - tb.y
         m = t.margins
-        # keep region inside margins and below the (possibly two-line) title;
-        # left edge aligned with the title frame so text starts on one guide
+        # область остаётся в полях и под заголовком (возможно, двухстрочным);
+        # левый край выровнен по рамке заголовка, чтобы текст начинался от одной направляющей
         on_title_guide = bool(tb and abs(tb.x - region.x) < 0.06 * t.slide_w)
         if on_title_guide:
             region = Box(x=tb.x, y=region.y, w=region.r - tb.x, h=region.h)
         x0 = region.x if on_title_guide else max(region.x, m.left)
         y0 = max(region.y, title_bottom + int(0.025 * t.slide_h))
         x1 = min(region.r, t.slide_w - m.right)
-        # bottom: above the layout's footer / date / number zone, with a small safe area
+        # низ: над зоной колонтитула / даты / номера макета, с небольшим запасом
         foot = [Box(**ph["box"]) for ph in layout_info.placeholders
                 if ph.get("type") in ("FOOTER", "DATE", "SLIDE_NUMBER") and ph.get("box")]
         foot_top = min((b.y for b in foot if b.y > 0.75 * t.slide_h and b.h > 0), default=t.slide_h)
         y1 = min(region.b, t.slide_h - m.bottom, foot_top - int(0.015 * t.slide_h), int(0.94 * t.slide_h))
-        if x1 - x0 < 0.3 * t.slide_w:  # only a sliver is free: use the width between margins
+        if x1 - x0 < 0.3 * t.slide_w:  # свободна лишь узкая полоса: используем ширину между полями
             x0, x1 = m.left, t.slide_w - m.right
-        if y1 - y0 < 0.3 * t.slide_h:  # never push content below the slide: take the area under the title
+        if y1 - y0 < 0.3 * t.slide_h:  # контент никогда не уходит ниже слайда: берём область под заголовком
             y1 = t.slide_h - m.bottom
             y0 = max(title_bottom + int(0.02 * t.slide_h), min(y0, y1 - int(0.3 * t.slide_h)))
         region = Box(x=x0, y=y0, w=max(x1 - x0, 1), h=max(y1 - y0, 1))
         st = self._style_for(bg, self._region_colors(layout_info, region))
         if layout_info.textured:
-            # busy background: a quiet plate in template colours keeps text legible
+            # пёстрый фон: спокойная подложка в цветах шаблона сохраняет читаемость текста
             pad = int(0.02 * t.slide_w)
             plate_color = C.mix(t.background_hex if rel_luminance(t.background_hex) > 0.5 else "FFFFFF", bg, 0.08) \
                 if rel_luminance(bg) > 0.35 else C.mix("000000", bg, 0.15)
@@ -923,7 +949,7 @@ class DeckBuilder:
                        rounded=True, name="Plate")
             st = self._style_for(plate_color)
         lead = spec.subtitle or (spec.message if kind != "bullets" else "")
-        if lead:  # sized to its text (at body size), between 12% and 30% of the region
+        if lead:  # по размеру текста (кеглем основного текста), от 12% до 30% области
             need = measure([lead], t.body_font, t.type_scale.body, region.w).height_emu
             lh = min(max(need, int(region.h * 0.12)), int(region.h * 0.3))
             C.add_text(slide, Box(x=region.x, y=region.y, w=region.w, h=lh), [lead], st, role="body", color=st.muted,
@@ -956,17 +982,19 @@ class DeckBuilder:
 
 
 def _item_line(it: Item) -> str:
-    """One bullet for an item: value first (a KPI must not lose its number), then title: text."""
+    """Один пункт на элемент: сначала значение (KPI не должен терять число), затем «заголовок: текст»."""
     head = " ".join(x for x in (it.value, it.title) if x)
     return f"{head}: {it.text}" if head and it.text else (head or it.text)
 
 
 def _fmt_num(v: float, unit: str) -> str:
+    """Число с разделителями разрядов и единицей измерения."""
     s = f"{v:,.0f}".replace(",", " ") if abs(v) >= 100 or float(v).is_integer() else f"{v:.1f}".replace(".", ",")
     return f"{s}{unit if unit in ('%', '₽', '$', '€') else (' ' + unit if unit else '')}"
 
 
 def _chart_as_table(spec: SlideSpec):
+    """Данные диаграммы в виде таблицы."""
     from decksmith.core.models import TableSpec
 
     ch = spec.chart

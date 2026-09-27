@@ -1,4 +1,4 @@
-// Typed client for the DeckSmith API.
+// Типизированный клиент API DeckSmith.
 
 export type Box = { x: number; y: number; w: number; h: number }
 
@@ -95,6 +95,7 @@ export type Run = {
 }
 
 async function j<T>(r: Response): Promise<T> {
+  // ответ сервера -> JSON; при ошибке HTTP — исключение с текстом ответа
   if (!r.ok) throw new Error((await r.text()) || r.statusText)
   return r.json() as Promise<T>
 }
@@ -104,12 +105,14 @@ export const api = {
   templates: () => fetch('/api/templates').then(j<TemplateCard[]>),
   template: (id: string) => fetch(`/api/templates/${id}`).then(j<TemplateDetail>),
   uploadTemplate: (f: File) => {
+    // шаблон разбирается на сервере сразу после загрузки
     const fd = new FormData()
     fd.append('file', f)
     return fetch('/api/templates', { method: 'POST', body: fd }).then(j<TemplateCard>)
   },
   content: () => fetch('/api/content').then(j<ContentPack[]>),
   uploadContent: (files: File[]) => {
+    // контент-пакет: несколько файлов одним запросом
     const fd = new FormData()
     files.forEach((f) => fd.append('files', f))
     return fetch('/api/content', { method: 'POST', body: fd }).then(j<ContentPack>)

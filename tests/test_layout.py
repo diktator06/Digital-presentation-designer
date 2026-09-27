@@ -1,4 +1,4 @@
-"""Layout layer: deterministic selection, clean output, native objects, three distinct variants."""
+"""Слой вёрстки: детерминированный выбор, чистый результат, нативные объекты, три различных варианта."""
 import re
 
 import pytest
@@ -13,6 +13,7 @@ LEFTOVER = re.compile(r"lorem ipsum|^\s*(заголовок|текст|пунк�
 
 
 def _build(profile, plan, variant, tmp_path):
+    """Выбор паттернов, сборка и сохранение колоды."""
     decisions = select_layouts(plan, profile, variant)
     b = DeckBuilder(profile, variant)
     rep = b.build(plan, decisions)
@@ -20,6 +21,7 @@ def _build(profile, plan, variant, tmp_path):
 
 
 def test_selection_is_deterministic(profiles, plan):
+    """Одинаковые входные данные дают одинаковый выбор паттернов."""
     v = load_variants()["balanced"]
     a = [d.model_dump() for d in select_layouts(plan, profiles["vk_tech"], v)]
     b = [d.model_dump() for d in select_layouts(plan, profiles["vk_tech"], v)]
@@ -28,6 +30,7 @@ def test_selection_is_deterministic(profiles, plan):
 
 @pytest.mark.parametrize("name", ["vk_tech", "vk_workspace", "vk_education"])
 def test_build_is_clean_and_native(profiles, plan, tmp_path, name):
+    """Колода чистая: нативные объекты, без текста шаблона и пустых слайдов."""
     prof = profiles[name]
     path, decisions, rep = _build(prof, plan, load_variants()["balanced"], tmp_path)
     prs = Presentation(str(path))
@@ -49,6 +52,7 @@ def test_build_is_clean_and_native(profiles, plan, tmp_path, name):
 
 
 def test_variants_differ(profiles, plan, tmp_path):
+    """Три варианта заметно различаются выбором паттернов."""
     prof = profiles["vk_education"]
     choices = {}
     for name, v in load_variants().items():
@@ -60,6 +64,7 @@ def test_variants_differ(profiles, plan, tmp_path):
 
 
 def test_unknown_template_builds(unknown_template, plan, tmp_path):
+    """Незнакомый шаблон разбирается и собирается."""
     from decksmith.parsing.template_parser import analyze_template
 
     prof = analyze_template(unknown_template)
@@ -68,7 +73,7 @@ def test_unknown_template_builds(unknown_template, plan, tmp_path):
 
 
 def test_text_frame_grows_inside_its_card(unknown_template, tmp_path):
-    """Organisers' clarification: a text frame may grow inside its block, so the type keeps its size."""
+    """Уточнение организаторов: текстовая рамка может расти внутри своего блока, поэтому кегль сохраняется."""
     from decksmith.core.models import DeckPlan, Item, PatternKind, SlideLayout, SlideSpec
     from decksmith.parsing.template_parser import analyze_template
 

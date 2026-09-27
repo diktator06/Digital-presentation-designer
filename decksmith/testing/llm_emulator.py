@@ -1,8 +1,8 @@
-"""In-process OpenAI-compatible emulator for testing the LLM path deterministically.
+"""Эмулятор OpenAI-совместимого API в том же процессе для детерминированного теста пути через LLM.
 
-Plugs into LLMClient via httpx.MockTransport. Answers per skill (header
-X-DeckSmith-Skill), records every request, and returns a schema-invalid outline
-on the first call so the JSON-repair round is exercised too.
+Подключается к LLMClient через httpx.MockTransport. Отвечает по скиллу (заголовок
+X-DeckSmith-Skill), записывает каждый запрос и на первый вызов возвращает структуру,
+не проходящую схему, чтобы раунд исправления JSON тоже проверялся.
 """
 from __future__ import annotations
 
@@ -30,6 +30,7 @@ OUTLINE = {
 
 
 def _writer_answer(intent: str, n: int) -> dict:
+    """Ответ эмулятора за автора текстов для интента слайда."""
     if intent == "agenda":
         return {"items": [{"title": t} for t in ("Проблема", "Решение", "Архитектура", "Итоги")][:n]}
     if intent == "stats":
@@ -50,6 +51,7 @@ def _writer_answer(intent: str, n: int) -> dict:
 
 class Emulator:
     def __init__(self, fail_visual_on: set[int] | None = None):
+        """Эмулятор: журнал запросов и номера слайдов, на которых визуальный аудит находит проблему."""
         self.requests: list[dict] = []
         self.outline_calls = 0
         self.fail_visual_on = fail_visual_on or {2}
@@ -66,7 +68,8 @@ class Emulator:
                 content = json.dumps(OUTLINE, ensure_ascii=False)
             else:
                 self.outline_calls += 1
-                broken = {"title": OUTLINE["title"], "slides": [{"intent": "title"}]}  # slide without "title": schema error
+                # слайд без "title": ошибка схемы
+                broken = {"title": OUTLINE["title"], "slides": [{"intent": "title"}]}
                 content = json.dumps(broken, ensure_ascii=False)
         elif skill.startswith("slide_writer"):
             m = re.search(r"intent=(\w+)", text)
@@ -92,4 +95,5 @@ class Emulator:
                                          "usage": {"prompt_tokens": len(text) // 4, "completion_tokens": len(content) // 4}})
 
     def transport(self) -> httpx.MockTransport:
+        """HTTP-транспорт для LLMClient."""
         return httpx.MockTransport(self.handler)

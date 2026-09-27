@@ -1,8 +1,8 @@
-"""OpenAI-compatible LLM/VLM client (vLLM, SGLang, Ollama, cloud providers, the organiser's inference...).
+"""OpenAI-совместимый клиент LLM/VLM (vLLM, SGLang, Ollama, облачные провайдеры, инференс организатора...).
 
-* async, bounded concurrency (one semaphore per process)
-* JSON mode with tolerant extraction + one schema-guided repair round
-* per-call telemetry (latency, tokens) collected into the run manifest
+* асинхронный, ограниченный параллелизм (один семафор на процесс)
+* JSON-режим с терпимым извлечением + один раунд исправления по схеме
+* телеметрия каждого вызова (задержка, токены) собирается в манифест запуска
 """
 from __future__ import annotations
 
@@ -46,6 +46,7 @@ class Telemetry:
     calls: list[CallStat] = field(default_factory=list)
 
     def summary(self) -> dict:
+        """Сводка телеметрии вызовов модели для манифеста."""
         return {
             "calls": len(self.calls),
             "failed": sum(not c.ok for c in self.calls),
@@ -84,7 +85,7 @@ def extract_json(text: str) -> Any:
             depth -= 1
             if depth == 0:
                 return json.loads(text[start:i + 1])
-    # truncated output: try to close brackets
+    # обрезанный вывод: пробуем закрыть скобки
     frag = text[start:]
     frag += "]" * max(frag.count("[") - frag.count("]"), 0) + "}" * max(frag.count("{") - frag.count("}"), 0)
     return json.loads(frag)
@@ -97,24 +98,27 @@ class LLMClient:
         self.telemetry = telemetry or Telemetry()
         self._sem = asyncio.Semaphore(self.cfg.max_concurrency)
         self._rate_lock = asyncio.Lock()
-        self._next_start = 0.0  # monotonic time of the next allowed request start (max_rps)
+        self._next_start = 0.0  # монотонное время следующего разрешённого старта запроса (max_rps)
         self._client: httpx.AsyncClient | None = None
-        self._transport = transport  # tests plug an in-process OpenAI-compatible emulator here
+        self._transport = transport  # тесты подключают сюда эмулятор OpenAI-совместимого API в том же процессе
 
     @property
     def enabled(self) -> bool:
+        """Модель подключена."""
         return self.cfg.enabled
 
     async def __aenter__(self):
+        """Открывает HTTP-клиент."""
         self._client = httpx.AsyncClient(timeout=self.cfg.timeout_s, transport=self._transport)
         return self
 
     async def __aexit__(self, *exc):
+        """Закрывает HTTP-клиент."""
         if self._client:
             await self._client.aclose()
 
     async def _pace(self) -> None:
-        """Space request starts to `max_rps` (hosted APIs reject bursts with HTTP 429)."""
+        """Разносит старты запросов согласно `max_rps` (хостинговые API отклоняют всплески с HTTP 429)."""
         if self.cfg.max_rps <= 0:
             return
         async with self._rate_lock:
@@ -125,6 +129,7 @@ class LLMClient:
             await asyncio.sleep(wait)
 
     def _model(self, kind: str) -> str:
+        """Имя модели для вида вызова (текстовая или мультимодальная)."""
         if kind == "vlm":
             return self.cfg.vlm_model or self.cfg.model
         return self.cfg.model
@@ -143,7 +148,8 @@ class LLMClient:
             body["response_format"] = {"type": "json_object"}
         body.update(self.cfg.extra_body or {})
         headers = {"Authorization": f"Bearer {self.cfg.api_key}"} if self.cfg.api_key else {}
-        headers["X-DeckSmith-Skill"] = skill  # observability only; servers ignore unknown headers
+        # только для наблюдаемости; серверы игнорируют неизвестные заголовки
+        headers["X-DeckSmith-Skill"] = skill
         url = self.cfg.base_url.rstrip("/") + "/chat/completions"
         last: Exception | None = None
         for attempt in range(self.cfg.max_retries + 1):
@@ -156,12 +162,13 @@ class LLMClient:
                     if self._client is None:
                         await client.aclose()
                 if r.status_code == 400 and json_mode and "response_format" in body:
-                    body.pop("response_format")  # provider without JSON mode
+                    body.pop("response_format")  # провайдер без JSON-режима
                     continue
                 if r.status_code == 400 and "chat_template_kwargs" in body:
                     body.pop("chat_template_kwargs")
                     continue
-                if r.status_code == 429 or r.status_code >= 500:  # rate limit / busy upstream: back off, retry
+                # лимит запросов / перегруженный сервер: пауза и повтор
+                if r.status_code == 429 or r.status_code >= 500:
                     ra = r.headers.get("retry-after", "")
                     delay = float(ra) if ra.replace(".", "", 1).isdigit() else min(20.0, 2.0 * 2 ** attempt)
                     last = LLMError(f"HTTP {r.status_code}: {r.text[:160]}")
@@ -175,7 +182,7 @@ class LLMClient:
                 self.telemetry.calls.append(CallStat(skill, body["model"], time.time() - t0,
                                                      usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)))
                 return content
-            except Exception as e:  # network / 5xx / rate limit
+            except Exception as e:  # сеть / 5xx / лимит запросов
                 last = e
                 self.telemetry.calls.append(CallStat(skill, body["model"], time.time() - t0, ok=False, note=str(e)[:200]))
                 await asyncio.sleep(1.5 * (attempt + 1))
@@ -183,8 +190,10 @@ class LLMClient:
 
     async def run_skill(self, skill: Skill, schema: type[T] | None = None, images: list[str | Path] | None = None,
                         validate=None, **ctx) -> T | dict | str:
-        """Render + call + parse. `validate(result) -> error | None` adds a semantic check
-        (e.g. slide count) that triggers the same single repair round as a schema error."""
+        """Рендер + вызов + разбор. `validate(result) -> ошибка | None` добавляет смысловую проверку
+        (например, число слайдов), которая запускает тот же единственный раунд исправления, что и ошибка
+        схемы.
+        """
         system, user = skill.render(**ctx)
         content: Any = user
         if images:
@@ -206,7 +215,7 @@ class LLMClient:
                 return result
             raise ValueError(problem)
         except (ValueError, ValidationError, json.JSONDecodeError) as e:
-            # one repair round: show the model its output and the validation error
+            # один раунд исправления: показываем модели её ответ и ошибку валидации
             from decksmith.generation.skills import load_skill
 
             _, repair = load_skill("json_repair").render(error=str(e)[:800])

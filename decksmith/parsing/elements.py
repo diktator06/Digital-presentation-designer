@@ -1,4 +1,4 @@
-"""Slide -> flat list of typed elements with absolute geometry and effective style."""
+"""Слайд -> плоский список типизированных элементов с абсолютной геометрией и эффективным стилем."""
 from __future__ import annotations
 
 import re
@@ -45,24 +45,29 @@ class Element:
     auto_shape: str | None = None
     has_line: bool = False
     insets: tuple[int, int, int, int] = (91440, 45720, 91440, 45720)  # l, t, r, b (EMU)
-    anchor: str = "t"  # vertical text anchor: t | ctr | b
-    brand: bool = False  # footer / date / slide number / text repeated on every slide: never a slot
-    graphic: str | None = None  # SmartArt / OLE / media frames that cannot be refilled
+    anchor: str = "t"  # вертикальная привязка текста: t | ctr | b
+    # колонтитул / дата / номер слайда / текст, повторённый на каждом слайде: никогда не слот
+    brand: bool = False
+    graphic: str | None = None  # рамки SmartArt / OLE / медиа, которые нельзя перезаполнить
 
     @property
     def is_title_ph(self) -> bool:
+        """Элемент — плейсхолдер заголовка."""
         return self.placeholder in ("TITLE", "CENTER_TITLE", "VERTICAL_TITLE")
 
     @property
     def font_size(self) -> float:
+        """Кегль элемента (0, если неизвестен)."""
         return self.style.size if self.style and self.style.size else 0.0
 
     @property
     def is_mono(self) -> bool:
+        """Моноширинный шрифт (образцы кода в шаблоне)."""
         return bool(self.style and self.style.font and self.style.font.lower() in MONO_FONTS)
 
 
 def _ph_name(shape) -> str | None:
+    """Имя типа плейсхолдера (TITLE, BODY...) или None."""
     pt = placeholder_type(shape)
     if pt is None:
         return None
@@ -70,11 +75,13 @@ def _ph_name(shape) -> str | None:
 
 
 def _autoshape_name(shape) -> str | None:
+    """Имя предустановленной геометрии автофигуры."""
     geom = shape._element.find(".//" + qn("a:prstGeom"))
     return geom.get("prst") if geom is not None else None
 
 
 def _has_autofit(shape) -> bool:
+    """У рамки включён автоподбор размера (растёт под текст)."""
     txb = shape._element.find(qn("p:txBody"))
     if txb is None:
         return False
@@ -83,8 +90,9 @@ def _has_autofit(shape) -> bool:
 
 
 def _table_box(shape, box: Box) -> Box:
-    """Renderers draw a table at its grid size (column widths, row heights); some exporters
-    (Google Slides) leave a dummy 3000000 EMU frame, so the frame size is not trusted."""
+    """Рендереры рисуют таблицу по размеру её сетки (ширины колонок, высоты строк); некоторые экспортёры
+    (Google Slides) оставляют фиктивную рамку 3000000 EMU, поэтому размеру рамки не доверяем.
+    """
     tbl = shape._element.find(".//" + qn("a:tbl"))
     grid = tbl.find(qn("a:tblGrid")) if tbl is not None else None
     if grid is None:
@@ -92,7 +100,7 @@ def _table_box(shape, box: Box) -> Box:
     w = sum(int(gc.get("w", "0")) for gc in grid.findall(qn("a:gridCol")))
     h = sum(int(tr.get("h", "0")) for tr in tbl.findall(qn("a:tr")))
     try:
-        sx, sy = box.w / int(shape.width), box.h / int(shape.height)  # group scaling
+        sx, sy = box.w / int(shape.width), box.h / int(shape.height)  # масштабирование группы
     except (TypeError, ValueError, ZeroDivisionError):
         sx = sy = 1.0
     return Box(x=box.x, y=box.y, w=int(w * sx) or box.w, h=int(h * sy) or box.h)
@@ -108,7 +116,7 @@ def text_insets(shape) -> tuple[int, int, int, int]:
 
 
 def text_anchor(shape) -> str:
-    """Vertical text anchor (t / ctr / b), following placeholder inheritance to layout and master."""
+    """Вертикальная привязка текста (t / ctr / b) с учётом наследования плейсхолдера от макета и мастера."""
     node = shape
     for _ in range(3):
         txb = node._element.find(qn("p:txBody"))
@@ -127,7 +135,7 @@ def text_anchor(shape) -> str:
 
 
 def _has_field(shape) -> bool:
-    """Text boxes carrying slide-number / date fields behave like footers."""
+    """Текстовые блоки с полями номера слайда / даты ведут себя как колонтитулы."""
     txb = shape._element.find(qn("p:txBody"))
     if txb is None:
         return False
@@ -135,6 +143,7 @@ def _has_field(shape) -> bool:
 
 
 def _line_visible(shape) -> bool:
+    """У фигуры видимый контур."""
     ln = shape._element.find(".//" + qn("a:ln"))
     if ln is None:
         return False
@@ -142,6 +151,9 @@ def _line_visible(shape) -> bool:
 
 
 def extract_elements(slide, theme: Theme, slide_w: int, slide_h: int, include_empty_placeholders: bool = True) -> list[Element]:
+    """Все элементы слайда с абсолютной геометрией, эффективным стилем и признаками (бренд, иконка,
+    автоподбор).
+    """
     resolver = StyleResolver(slide, theme)
     out: list[Element] = []
     icon_limit = 0.11 * min(slide_w, slide_h) * 1.6
@@ -250,7 +262,7 @@ def extract_elements(slide, theme: Theme, slide_w: int, slide_h: int, include_em
 
 
 # ----------------------------------------------------------------------------
-# Placeholder-text heuristics (language-agnostic-ish, RU + EN)
+# Эвристики текста-подсказки (почти независимо от языка, RU + EN)
 # ----------------------------------------------------------------------------
 _FILLER_RE = re.compile(
     r"^(заголовок|подзаголовок|текст|пункт|описание|название|имя фамилия|должность|показатель|итого|"
@@ -262,6 +274,7 @@ _FILLER_RE = re.compile(
 
 
 def is_filler_text(text: str) -> bool:
+    """Текст — подсказка-заглушка («Введите текст», «Lorem ipsum»...)."""
     t = re.sub(r"\s+", " ", text.strip().replace("​", ""))
     if not t:
         return True
@@ -271,5 +284,6 @@ def is_filler_text(text: str) -> bool:
 
 
 def is_numberish(text: str) -> bool:
+    """Текст — число или значение KPI."""
     t = text.strip().replace(" ", "").replace(" ", "")
     return bool(re.fullmatch(r"[<>~≈+\-]?[\d.,]+\s*(%|₽|\$|€|млн|млрд|тыс|k|m|x|×|\*)?|[xхXХ]{1,4}%?|0?\d", t))

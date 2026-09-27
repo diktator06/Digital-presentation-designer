@@ -1,7 +1,7 @@
-"""Rendering backend: LibreOffice (headless) for PPTX -> PDF, PyMuPDF for PDF -> PNG/SVG.
+"""Бэкенд рендера: LibreOffice (headless) для PPTX -> PDF, PyMuPDF для PDF -> PNG/SVG.
 
-Each conversion gets its own LibreOffice user profile so that several decks
-(three variants) can be rendered in parallel without profile lock conflicts.
+Каждая конвертация получает свой профиль пользователя LibreOffice, чтобы несколько колод
+(три варианта) рендерились параллельно без конфликтов блокировки профиля.
 """
 from __future__ import annotations
 
@@ -35,6 +35,7 @@ class RenderError(RuntimeError):
 
 
 def soffice_path() -> str:
+    """Путь к LibreOffice: из настроек, стандартных мест установки или PATH."""
     configured = settings().render.soffice
     if configured and Path(configured).exists():
         return configured
@@ -48,9 +49,10 @@ def soffice_path() -> str:
 
 
 def _run(cmd: list[str], timeout: float) -> tuple[int, str]:
-    """Run soffice in its own process group with output to a file, not pipes. On timeout the
-    whole group is killed: a lingering child holding the pipes open could otherwise block
-    `subprocess.run` long after its timeout."""
+    """Запускает soffice в собственной группе процессов с выводом в файл, а не в каналы. По таймауту убивается
+    вся группа: иначе зависший дочерний процесс, держащий каналы открытыми, мог бы блокировать
+    `subprocess.run` намного дольше таймаута.
+    """
     with tempfile.TemporaryFile() as out:
         proc = subprocess.Popen(cmd, stdout=out, stderr=out, env={**os.environ, "SAL_USE_VCLPLUGIN": "svp"},
                                 start_new_session=hasattr(os, "killpg"))
@@ -68,12 +70,14 @@ def _run(cmd: list[str], timeout: float) -> tuple[int, str]:
 
 
 def pptx_to_pdf(pptx: str | Path, out_dir: str | Path | None = None, timeout: int = 180) -> Path:
-    """PPTX -> PDF. A hung LibreOffice start (rare, seen under heavy parallel load) is killed
-    and retried once with a fresh profile, so one conversion never blocks the pipeline for long."""
+    """PPTX -> PDF. Зависший старт LibreOffice (редко, бывает под сильной параллельной нагрузкой) убивается и
+    повторяется один раз со свежим профилем, поэтому одна конвертация никогда надолго не блокирует
+    пайплайн.
+    """
     pptx = Path(pptx).resolve()
     out_dir = Path(out_dir or pptx.parent).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    # LibreOffice is sensitive to non-ASCII paths on some platforms: work in a temp dir.
+    # LibreOffice на некоторых платформах чувствителен к не-ASCII путям: работаем во временном каталоге.
     work = Path(tempfile.mkdtemp(prefix="decksmith_render_"))
     src = work / "deck.pptx"
     shutil.copy(pptx, src)
@@ -104,6 +108,7 @@ def pptx_to_pdf(pptx: str | Path, out_dir: str | Path | None = None, timeout: in
 
 
 def pdf_to_pngs(pdf: str | Path, out_dir: str | Path, dpi: int = 96, prefix: str = "slide") -> list[Path]:
+    """PDF -> PNG на каждую страницу."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     paths = []
@@ -117,7 +122,7 @@ def pdf_to_pngs(pdf: str | Path, out_dir: str | Path, dpi: int = 96, prefix: str
 
 
 def render_pptx(pptx: str | Path, out_dir: str | Path, dpi: int = 96) -> tuple[Path, list[Path]]:
-    """Render a deck: returns (pdf_path, [png per slide])."""
+    """Рендерит колоду: возвращает (путь к pdf, [png на каждый слайд])."""
     out_dir = Path(out_dir)
     pdf = pptx_to_pdf(pptx, out_dir)
     pngs = pdf_to_pngs(pdf, out_dir / "png", dpi=dpi)

@@ -1,4 +1,4 @@
-# DeckSmith runtime configuration. Every value may be overridden via ${ENV}.
+# Конфигурация DeckSmith. Любое значение можно переопределить через ${ENV}.
 llm:
   provider: ${DECKSMITH_LLM_PROVIDER:-openai_compatible}   # openai_compatible | offline
   base_url: ${DECKSMITH_LLM_BASE_URL:-}

@@ -1,13 +1,13 @@
-"""Low-level OOXML helpers: shape flattening, style inheritance, theme colors.
+"""Низкоуровневые помощники OOXML: разворачивание фигур, наследование стилей, цвета темы.
 
-python-pptx exposes only what is set explicitly on an element. A design
-system, however, lives in the inheritance chain:
+python-pptx отдаёт только то, что явно задано у элемента. Но дизайн-система
+живёт в цепочке наследования:
 
-    run rPr -> paragraph pPr/defRPr -> shape lstStyle -> layout placeholder
-            -> master placeholder -> master txStyles -> theme fonts/colors
+    rPr фрагмента -> pPr/defRPr абзаца -> lstStyle фигуры -> плейсхолдер макета
+            -> плейсхолдер мастера -> txStyles мастера -> шрифты/цвета темы
 
-This module resolves *effective* values deterministically so that the parser
-(and later the audit) sees what the renderer will draw.
+Модуль детерминированно разрешает *эффективные* значения, чтобы разборщик
+(а затем аудит) видел то, что нарисует рендерер.
 """
 from __future__ import annotations
 
@@ -30,19 +30,23 @@ NS = {
 
 
 # ----------------------------------------------------------------------------
-# Colors
+# Цвета
 # ----------------------------------------------------------------------------
 def hex_to_rgb(h: str) -> tuple[int, int, int]:
+    """hex -> (r, g, b)."""
     h = h.lstrip("#")
     return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
 
 
 def rgb_to_hex(rgb: tuple[float, float, float]) -> str:
+    """(r, g, b) -> hex."""
     return "".join(f"{max(0, min(255, round(c))):02X}" for c in rgb)
 
 
 def rel_luminance(h: str) -> float:
+    """Относительная яркость цвета по WCAG."""
     def ch(c: int) -> float:
+        """Линеаризация канала sRGB."""
         c = c / 255
         return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
 
@@ -51,13 +55,14 @@ def rel_luminance(h: str) -> float:
 
 
 def contrast_ratio(a: str, b: str) -> float:
+    """Контраст двух цветов по WCAG (1..21)."""
     la, lb = rel_luminance(a), rel_luminance(b)
     hi, lo = max(la, lb), min(la, lb)
     return (hi + 0.05) / (lo + 0.05)
 
 
 def color_distance(a: str, b: str) -> float:
-    """Perceptual-ish distance (redmean approximation), 0..~765."""
+    """Почти перцептивное расстояние (приближение redmean), 0..~765."""
     r1, g1, b1 = hex_to_rgb(a)
     r2, g2, b2 = hex_to_rgb(b)
     rm = (r1 + r2) / 2
@@ -66,7 +71,7 @@ def color_distance(a: str, b: str) -> float:
 
 
 def _apply_mods(hex_: str, el) -> str:
-    """Apply DrawingML color modifiers (lumMod/lumOff/tint/shade/alpha ignored)."""
+    """Применяет модификаторы цвета DrawingML (lumMod/lumOff/tint/shade; alpha игнорируется)."""
     r, g, b = (c / 255 for c in hex_to_rgb(hex_))
     h, l, s = colorsys.rgb_to_hls(r, g, b)
     for m in el:
@@ -100,19 +105,20 @@ class Theme:
     minor_font: str = "Arial"
 
     def scheme(self, name: str) -> str | None:
+        """Цвет схемы темы с учётом clrMap."""
         name = self.clr_map.get(name, name)
         return self.colors.get(name)
 
 
 def parse_theme(master) -> Theme:
-    """Theme bound to a slide master (+ its clrMap)."""
+    """Тема, привязанная к мастеру слайдов (+ его clrMap)."""
     th = Theme()
     try:
         theme_part = master.part.part_related_by(
             "http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme"
         )
         root = etree.fromstring(theme_part.blob)
-    except Exception:  # pragma: no cover - broken template
+    except Exception:  # pragma: no cover — повреждённый шаблон
         return th
     cs = root.find(".//a:clrScheme", NS)
     if cs is not None:
@@ -138,7 +144,7 @@ def parse_theme(master) -> Theme:
 
 
 def color_from_fill(el, theme: Theme) -> str | None:
-    """Resolve an element containing srgbClr/schemeClr/sysClr/prstClr."""
+    """Разрешает элемент, содержащий srgbClr/schemeClr/sysClr/prstClr."""
     if el is None:
         return None
     for child in el.iter():
@@ -156,6 +162,7 @@ def color_from_fill(el, theme: Theme) -> str | None:
 
 
 def resolve_font_name(name: str | None, theme: Theme) -> str | None:
+    """Реальное имя шрифта: ссылки +mj/+mn заменяются шрифтами темы."""
     if not name:
         return None
     if name.startswith("+mj"):
@@ -166,7 +173,7 @@ def resolve_font_name(name: str | None, theme: Theme) -> str | None:
 
 
 # ----------------------------------------------------------------------------
-# Shape flattening
+# Разворачивание фигур
 # ----------------------------------------------------------------------------
 @dataclass
 class ShapeRec:
@@ -178,10 +185,12 @@ class ShapeRec:
 
     @property
     def shape_id(self) -> int:
+        """id фигуры."""
         return self.shape.shape_id
 
 
 def _xfrm_box(shape) -> Box | None:
+    """Рамка фигуры в её собственных координатах (None, если размер не задан)."""
     try:
         x, y, w, h = shape.left, shape.top, shape.width, shape.height
     except Exception:
@@ -192,6 +201,7 @@ def _xfrm_box(shape) -> Box | None:
 
 
 def _group_transform(group):
+    """Преобразование координат группы: смещение и масштаб дочернего пространства."""
     xfrm = group._element.find(qn("p:grpSpPr")).find(qn("a:xfrm"))
     if xfrm is None:
         return (0, 0, 1.0, 1.0, 0, 0)
@@ -209,7 +219,7 @@ def _group_transform(group):
 
 
 def flatten_shapes(shapes, _path=None, _tf=None, _depth=0, _gpath=None) -> Iterator[ShapeRec]:
-    """Yield every leaf (and group) shape with its absolute slide box."""
+    """Отдаёт каждую листовую фигуру (и группу) с её абсолютной рамкой на слайде."""
     _path = _path or []
     _gpath = _gpath or []
     for i, sh in enumerate(shapes):
@@ -228,7 +238,7 @@ def flatten_shapes(shapes, _path=None, _tf=None, _depth=0, _gpath=None) -> Itera
             yield ShapeRec(sh, _path + [i], box, _depth, _gpath)
             local = _group_transform(sh)
             if _tf is not None:
-                # compose: parent maps child-space of this group
+                # композиция: родитель отображает дочернее пространство этой группы
                 ox, oy, sx, sy, cx0, cy0 = _tf
                 gox, goy, gsx, gsy, gcx0, gcy0 = local
                 local = (
@@ -245,12 +255,13 @@ def flatten_shapes(shapes, _path=None, _tf=None, _depth=0, _gpath=None) -> Itera
 
 
 # ----------------------------------------------------------------------------
-# Effective text style
+# Эффективный стиль текста
 # ----------------------------------------------------------------------------
 _TITLE_TYPES = {PP_PLACEHOLDER.TITLE, PP_PLACEHOLDER.CENTER_TITLE, PP_PLACEHOLDER.VERTICAL_TITLE}
 
 
 def placeholder_type(shape):
+    """Тип плейсхолдера фигуры или None."""
     try:
         return shape.placeholder_format.type if shape.is_placeholder else None
     except Exception:
@@ -258,7 +269,7 @@ def placeholder_type(shape):
 
 
 def _find_inherited_placeholder(shape, container):
-    """Find the placeholder a slide/layout placeholder inherits from."""
+    """Находит плейсхолдер, от которого наследуется плейсхолдер слайда/макета."""
     try:
         pf = shape.placeholder_format
     except Exception:
@@ -280,7 +291,7 @@ def _find_inherited_placeholder(shape, container):
 
 
 def _lvl_prop(txbody_el, lvl: int, attr: str, child: str | None = None):
-    """Read lstStyle/lvlNpPr/defRPr attribute (or child element) from a txBody."""
+    """Читает атрибут (или дочерний элемент) lstStyle/lvlNpPr/defRPr из txBody."""
     if txbody_el is None:
         return None
     lst = txbody_el.find(qn("a:lstStyle"))
@@ -298,7 +309,7 @@ def _lvl_prop(txbody_el, lvl: int, attr: str, child: str | None = None):
 
 
 def _spacing_pt(el, size: float, line: bool = False) -> float | None:
-    """spcBef / spcAft / lnSpc value: points, or a percentage of the line (as a multiplier for lnSpc)."""
+    """Значение spcBef / spcAft / lnSpc: пункты или доля строки (для lnSpc — как множитель)."""
     if el is None:
         return None
     pts, pct = el.find(qn("a:spcPts")), el.find(qn("a:spcPct"))
@@ -312,12 +323,14 @@ def _spacing_pt(el, size: float, line: bool = False) -> float | None:
 
 
 def _txstyle_ppr(master, kind: str, lvl: int):
+    """pPr уровня lvl из текстового стиля мастера."""
     tx = master._element.find(qn("p:txStyles"))
     st = tx.find(qn(f"p:{kind}")) if tx is not None else None
     return st.find(qn(f"a:lvl{lvl + 1}pPr")) if st is not None else None
 
 
 def _txstyle(master, kind: str, lvl: int):
+    """defRPr уровня lvl из текстового стиля мастера."""
     tx = master._element.find(qn("p:txStyles"))
     if tx is None:
         return None
@@ -336,28 +349,29 @@ class EffStyle:
     font: str | None = None
     color: str | None = None
     bold: bool = False
-    space_before: float = 0.0  # pt, paragraph spacing (resolved like the run style)
+    space_before: float = 0.0  # пт, интервалы абзаца (разрешаются так же, как стиль фрагмента)
     space_after: float = 0.0
-    line: float = 1.0  # line spacing multiplier (1.0 = single)
+    line: float = 1.0  # множитель межстрочного интервала (1.0 = одинарный)
 
 
 class StyleResolver:
-    """Resolves effective run styles for shapes of one slide (or layout)."""
+    """Разрешает эффективные стили фрагментов для фигур одного слайда (или макета)."""
 
     def __init__(self, slide, theme: Theme):
         self.slide = slide
         self.theme = theme
-        if hasattr(slide, "slide_layout"):  # regular slide
+        if hasattr(slide, "slide_layout"):  # обычный слайд
             self.layout = slide.slide_layout
             self.master = self.layout.slide_master
-        elif hasattr(slide, "slide_master"):  # layout
+        elif hasattr(slide, "slide_master"):  # макет
             self.layout = None
             self.master = slide.slide_master
-        else:  # master
+        else:  # мастер
             self.layout = None
             self.master = slide
 
     def _chain(self, shape):
+        """Цепочка наследования: фигура -> плейсхолдер макета -> плейсхолдер мастера."""
         chain = [shape]
         if not getattr(shape, "is_placeholder", False):
             return chain
@@ -372,6 +386,7 @@ class StyleResolver:
         return chain
 
     def _master_style_kind(self, shape) -> str:
+        """Какой текстовый стиль мастера наследует фигура: заголовка, тела или прочий."""
         pt = placeholder_type(shape)
         if pt in _TITLE_TYPES:
             return "titleStyle"
@@ -382,7 +397,7 @@ class StyleResolver:
     def resolve(self, shape, paragraph=None, run=None) -> EffStyle:
         st = EffStyle()
         lvl = paragraph.level if paragraph is not None else 0
-        # 1. run / paragraph explicit
+        # 1. явно у фрагмента / абзаца
         if run is not None:
             rpr = run._r.find(qn("a:rPr"))
             if rpr is not None:
@@ -411,7 +426,7 @@ class StyleResolver:
                 epr = paragraph._p.find(qn("a:endParaRPr"))
                 if epr is not None and epr.get("sz") and run is None:
                     st.size = int(epr.get("sz")) / 100
-        # 2. shape lstStyle, then inherited placeholders
+        # 2. lstStyle фигуры, затем унаследованные плейсхолдеры
         for sh in self._chain(shape):
             txb = sh._element.find(qn("p:txBody"))
             if st.size is None:
@@ -427,7 +442,7 @@ class StyleResolver:
                 if f is not None:
                     st.color = color_from_fill(f, self.theme)
             if sh is not shape and txb is not None and (st.size is None or st.font is None):
-                # layout placeholders often carry the style on their sample runs
+                # плейсхолдеры макетов часто несут стиль на своих образцовых фрагментах
                 for p in txb.findall(qn("a:p")):
                     for r in p.findall(qn("a:r")):
                         rpr = r.find(qn("a:rPr"))
@@ -442,7 +457,7 @@ class StyleResolver:
                             st.color = color_from_fill(rpr.find(qn("a:solidFill")), self.theme)
                         break
                     break
-        # 3. master text styles
+        # 3. текстовые стили мастера
         d = _txstyle(self.master, self._master_style_kind(shape), lvl)
         if d is not None:
             if st.size is None and d.get("sz"):
@@ -451,14 +466,14 @@ class StyleResolver:
                 st.font = resolve_font_name(d.find(qn("a:latin")).get("typeface"), self.theme)
             if st.color is None and d.find(qn("a:solidFill")) is not None:
                 st.color = color_from_fill(d.find(qn("a:solidFill")), self.theme)
-        # 4. defaults
+        # 4. значения по умолчанию
         if st.size is None:
             st.size = 18.0
         if st.font is None:
             st.font = self.theme.major_font if self._master_style_kind(shape) == "titleStyle" else self.theme.minor_font
         if st.color is None:
             st.color = self.theme.scheme("tx1") or "000000"
-        # autofit scale
+        # масштаб автоподбора
         txb = shape._element.find(qn("p:txBody"))
         if txb is not None:
             bp = txb.find(qn("a:bodyPr"))
@@ -472,8 +487,9 @@ class StyleResolver:
         return st
 
     def _spacing(self, shape, paragraph, lvl: int, st: EffStyle) -> None:
-        """Paragraph spacing before/after and line spacing: paragraph, shape and inherited
-        placeholder list styles, then the master text style (as renderers resolve them)."""
+        """Интервалы до/после абзаца и межстрочный интервал: абзац, фигура и унаследованные списки стилей
+        плейсхолдеров, затем текстовый стиль мастера (так, как их разрешают рендереры).
+        """
         sources = [paragraph._p.find(qn("a:pPr"))]
         for sh in self._chain(shape):
             txb = sh._element.find(qn("p:txBody"))
@@ -495,7 +511,7 @@ class StyleResolver:
             st.line *= 1 - int(na.get("lnSpcReduction")) / 100000
 
     def dominant(self, shape) -> EffStyle | None:
-        """Style of the first non-empty run (representative for the shape)."""
+        """Стиль первого непустого фрагмента (представительный для фигуры)."""
         if not getattr(shape, "has_text_frame", False) or not shape.has_text_frame:
             return None
         for p in shape.text_frame.paragraphs:
@@ -508,10 +524,10 @@ class StyleResolver:
 
 
 # ----------------------------------------------------------------------------
-# Fills / backgrounds
+# Заливки / фоны
 # ----------------------------------------------------------------------------
 def shape_fill_hex(shape, theme: Theme) -> str | None:
-    """Solid fill of an autoshape (explicit or via style fillRef)."""
+    """Сплошная заливка автофигуры (явная или через fillRef стиля)."""
     el = shape._element
     sppr = el.find(qn("p:spPr"))
     if sppr is not None:
@@ -534,7 +550,7 @@ def shape_fill_hex(shape, theme: Theme) -> str | None:
 
 
 def background_hex(container, theme: Theme) -> str | None:
-    """Solid (or first gradient stop) background color of slide/layout/master."""
+    """Цвет сплошного фона (или первой точки градиента) слайда/макета/мастера."""
     csld = container._element.find(qn("p:cSld"))
     if csld is None:
         return None
@@ -554,7 +570,7 @@ _FILLS = ("solidFill", "gradFill", "blipFill", "pattFill")
 
 
 def paints(el) -> bool:
-    """Does a shape paint anything by itself: a fill, an outline or a theme style fill?"""
+    """Рисует ли фигура что-то сама: заливку, контур или заливку из стиля темы?"""
     sp_pr = el.find(qn("p:spPr"))
     for c in sp_pr if sp_pr is not None else []:
         name = etree.QName(c).localname

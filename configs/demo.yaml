@@ -1,5 +1,5 @@
-# Reproducible demo run: 3 templates x 3 variants on one content pack.
-# decksmith run configs/demo.yaml  (needs DECKSMITH_LLM_* in .env)
+# Воспроизводимый демо-запуск: 3 шаблона × 3 варианта на одном контент-пакете.
+# decksmith run configs/demo.yaml  (нужны DECKSMITH_LLM_* в .env)
 templates:
   - data/templates/vk_tech.pptx
   - data/templates/vk_workspace.pptx

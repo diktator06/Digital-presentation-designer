@@ -1,4 +1,4 @@
-"""Design-token extraction: palette, typography scale, margins, grid, canonical boxes."""
+"""Извлечение дизайн-токенов: палитра, шкала кеглей, поля, сетка, канонические рамки."""
 from __future__ import annotations
 
 import colorsys
@@ -11,12 +11,14 @@ from decksmith.parsing.ooxml import Theme, color_distance, hex_to_rgb, rel_lumin
 
 
 def saturation(h: str) -> float:
+    """Насыщенность цвета (0 для почти белых и почти чёрных)."""
     r, g, b = (c / 255 for c in hex_to_rgb(h))
     _, l, s = colorsys.rgb_to_hls(r, g, b)
     return s if 0.08 < l < 0.92 else 0.0
 
 
 def _percentile(values: list[float], q: float) -> float:
+    """Процентиль q списка значений."""
     if not values:
         return 0.0
     v = sorted(values)
@@ -25,6 +27,7 @@ def _percentile(values: list[float], q: float) -> float:
 
 
 def merge_colors(counter: Counter, threshold: float = 28.0) -> list[tuple[str, float]]:
+    """Сливает близкие цвета, суммируя их веса."""
     merged: list[list] = []
     for hex_, w in counter.most_common():
         for m in merged:
@@ -37,6 +40,7 @@ def merge_colors(counter: Counter, threshold: float = 28.0) -> list[tuple[str, f
 
 
 def _shift(h: str, dh: float = 0.0, dl: float = 0.0) -> str:
+    """Сдвигает оттенок и светлоту цвета."""
     from decksmith.parsing.ooxml import rgb_to_hex
 
     r, g, b = (c / 255 for c in hex_to_rgb(h))
@@ -46,11 +50,11 @@ def _shift(h: str, dh: float = 0.0, dl: float = 0.0) -> str:
 
 
 def pick_accent(palette: list[ColorToken], render_colors: Counter, theme: Theme, bg: str) -> tuple[str, list[str]]:
-    """Brand accent = the most used saturated colour that is *visible on the content background*.
+    """Фирменный акцент = самый используемый насыщенный цвет, *видимый на фоне контента*.
 
-    Evidence: colours of text/fills in example slides + colours of the rendered slides
-    (art, bands, backgrounds). Theme accents only count when the template really uses
-    them — unused default themes (e.g. an office-suite default green) are ignored.
+        Данные: цвета текста/заливок на слайдах-примерах + цвета отрендеренных слайдов
+        (графика, полосы, фоны). Акценты темы учитываются, только если шаблон действительно
+        их использует, — неиспользуемые темы по умолчанию (например, зелёная тема офисного пакета) игнорируются.
     """
     from decksmith.parsing.ooxml import contrast_ratio
 
@@ -73,7 +77,7 @@ def pick_accent(palette: list[ColorToken], render_colors: Counter, theme: Theme,
         if any(color_distance(h, c) < 40 for c, _ in cands):
             continue
         cands.append((h, s))
-    if not cands:  # nothing saturated in use: fall back to a theme accent that shows on the bg
+    if not cands:  # насыщенных цветов не используется: откатываемся к акценту темы, который виден на фоне
         for k in ("accent1", "accent2", "accent3", "accent4", "dk2"):
             h = theme.colors.get(k)
             if h and saturation(h) > 0.2 and contrast_ratio(h, bg) >= 1.6:
@@ -82,7 +86,7 @@ def pick_accent(palette: list[ColorToken], render_colors: Counter, theme: Theme,
     accent = cands[0][0] if cands else ("3366CC" if rel_luminance(bg) > 0.4 else "66A3FF")
     charts = [accent] + [h for h, _ in cands[1:] if contrast_ratio(h, bg) >= 1.5][:4]
     step = 0
-    while len(charts) < 5:  # extend with hue rotations of the accent, tuned to the bg
+    while len(charts) < 5:  # дополняем поворотами оттенка акцента, подобранными под фон
         step += 1
         cand = _shift(accent, dh=0.13 * step, dl=(-0.08 if rel_luminance(bg) > 0.4 else 0.08) * (step % 2))
         if all(color_distance(cand, c) > 50 for c in charts):
@@ -111,7 +115,7 @@ def build_tokens(
     ]
     content_idx = content_idx or list(range(len(slide_elements)))
 
-    # --- palette ---------------------------------------------------------------
+    # --- палитра -----------------------------------------------------------------
     colors: Counter = Counter()
     text_colors: Counter = Counter()
     fill_colors: Counter = Counter()
@@ -152,7 +156,7 @@ def build_tokens(
         if hex_ in text_colors:
             roles.append("text")
         palette.append(ColorToken(hex=hex_, roles=roles, usage=int(w), luminance=round(rel_luminance(hex_), 3)))
-    # add theme accents that are really used somewhere (or all accents if none used)
+    # добавляем акценты темы, которые где-то действительно используются (или все, если ни один)
     for k in ("accent1", "accent2", "accent3", "dk1", "lt1"):
         h = theme.colors.get(k)
         if h and not any(color_distance(h, c.hex) < 28 for c in palette):
@@ -166,14 +170,14 @@ def build_tokens(
     dark = rel_luminance(bg_hex) < 0.18 if not dark_votes else dark
 
     accent, chart_colors = pick_accent(palette, render_colors or Counter(), theme, bg_hex)
-    # text color: most used readable text color against the dominant background
+    # цвет текста: самый частый читаемый цвет текста на преобладающем фоне
     text_hex = "FFFFFF" if dark else "000000"
     for h, _ in text_colors.most_common():
         if (rel_luminance(h) > 0.5) == dark and saturation(h) < 0.35:
             text_hex = h
             break
 
-    # --- typography -----------------------------------------------------------
+    # --- типографика -------------------------------------------------------------
     fonts = []
     for fam, n in font_usage.most_common(6):
         avail, file = font_available.get(fam, (False, None))
@@ -197,8 +201,9 @@ def build_tokens(
     mode = lambda xs, d: statistics.mode(xs) if xs else d  # noqa: E731
     h_pt = slide_h / 12700
     clamp = lambda v, lo, hi: max(lo, min(hi, v))  # noqa: E731
-    # Evidence from example slides wins; with few examples placeholder defaults (often 32 pt
-    # body, 44 pt title) are pulled into a range proportional to the slide height.
+    # Данные слайдов-примеров важнее; при малом числе примеров значения плейсхолдеров по умолчанию (часто 32
+    # пт
+    # текст, 44 пт заголовок) приводятся к диапазону, пропорциональному высоте слайда.
     title = clamp(float(mode(title_sizes, sizes[0] if sizes else h_pt * 0.07)), h_pt * 0.04, h_pt * 0.1)
     body_default = h_pt * 0.032
     body = float(mode(body_sizes, body_default)) if len(body_sizes) >= 3 else min(float(mode(body_sizes, body_default)), body_default)
@@ -206,32 +211,32 @@ def build_tokens(
     subtitle = clamp(float(mode(item_title_sizes, body * 1.25)), body, max(body, title * 0.8))
     caption = clamp(float(min([s for s in sizes if s >= 8] or [body * 0.75])), min(8.0, body), body)
     number = clamp(float(statistics.median(number_sizes)) if number_sizes else title * 1.6, title, h_pt * 0.16)
-    # role sizes are always part of the scale (compose and fitting only use scale values)
+    # кегли ролей всегда входят в шкалу (композиция и подгонка используют только значения шкалы)
     title, subtitle, body, caption, number = (round(x * 2) / 2 for x in (title, subtitle, body, caption, number))
     sizes = sorted(set(sizes) | {title, subtitle, body, caption, number}, reverse=True)
     scale = TypeScale(sizes=sizes, title=round(title, 2), body=round(body, 2), subtitle=round(subtitle, 2),
                       caption=round(caption, 2), number=round(number, 2))
 
-    # --- geometry -------------------------------------------------------------
+    # --- геометрия ---------------------------------------------------------------
     lefts, rights, tops, bottoms = [], [], [], []
     for si in content_idx:
         for e in slide_elements[si]:
             if e.kind not in ("text", "picture", "table", "chart") or e.box.area > 0.6 * area:
                 continue
             if e.kind == "picture" and (e.box.x <= 0 or e.box.r >= slide_w):
-                continue  # full-bleed art
+                continue  # графика во весь слайд
             if e.box.w < 0.01 * slide_w:
                 continue
             lefts.append(e.box.x)
             rights.append(slide_w - e.box.r)
             tops.append(e.box.y)
             bottoms.append(slide_h - e.box.b)
-    if len(lefts) >= 6:  # enough evidence: margins as the template uses them
+    if len(lefts) >= 6:  # данных достаточно: поля такие, как их использует шаблон
         left = int(_percentile([v for v in lefts if v > 0], 0.08)) or int(0.05 * slide_w)
         right = int(_percentile([v for v in rights if v > 0], 0.08)) or left
         top = int(_percentile([v for v in tops if v > 0], 0.05)) or int(0.06 * slide_h)
         bottom = int(_percentile([v for v in bottoms if v > 0], 0.08)) or int(0.06 * slide_h)
-    else:  # one or two examples say nothing about margins: proportional defaults
+    else:  # один-два примера ничего не говорят о полях: пропорциональные значения по умолчанию
         left = right = int(0.055 * slide_w)
         top, bottom = int(0.06 * slide_h), int(0.07 * slide_h)
     cl = lambda v, lo, hi: int(max(lo, min(hi, v)))  # noqa: E731

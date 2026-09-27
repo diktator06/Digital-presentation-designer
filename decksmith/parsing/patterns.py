@@ -1,17 +1,17 @@
-"""Composition-pattern extraction.
+"""Извлечение композиционных паттернов.
 
-A template is treated as a *library of example compositions*. For every example
-slide we detect:
-  * the title slot,
-  * repeaters: sets of visually identical items (cards, steps, KPI tiles),
-    found by clustering text elements on (font size, weight, width) and
-    checking their spatial arrangement (row / column / grid),
-  * the remaining free slots (subtitle, body, labels, pictures, tables),
-  * the pattern kind (title / section / cards / steps / stats / ...),
-    with a human-readable reason so the decision is auditable.
+Шаблон рассматривается как *библиотека примеров композиций*. Для каждого
+слайда-примера определяются:
+  * слот заголовка,
+  * повторители: наборы визуально одинаковых элементов (карточки, шаги, плитки KPI),
+    найденные кластеризацией текстовых элементов по (кеглю, насыщенности, ширине)
+    и проверкой их расположения (строка / колонка / сетка),
+  * оставшиеся свободные слоты (подзаголовок, тело, подписи, картинки, таблицы),
+  * вид паттерна (title / section / cards / steps / stats / ...)
+    с понятным человеку обоснованием, чтобы решение можно было проверить.
 
-Nothing here is specific to the three provided templates: the rules operate
-on geometry, typography and generic RU/EN keywords only.
+Здесь нет ничего специфичного для трёх выданных шаблонов: правила работают
+только с геометрией, типографикой и общими ключевыми словами RU/EN.
 """
 from __future__ import annotations
 
@@ -37,9 +37,10 @@ KW = {
 }
 
 
-# Text addressed to the person filling the template (not sample content): "используй слайд 7 для
-# оформления", "обязательный блок", "this template". Plain filler prompts ("вставьте текст") are NOT here:
-# they are normal example-slide content and are replaced anyway.
+# Текст, обращённый к тому, кто заполняет шаблон (а не образец содержания): «используй слайд 7 для
+# оформления», «обязательный блок», «this template». Простые подсказки-заглушки («вставьте текст») сюда НЕ
+# входят:
+# это обычное содержание слайдов-примеров, и оно всё равно заменяется.
 INSTRUCTION_RE = re.compile(
     r"(используй(?:те)?\b|для оформления|эт(?:от|ом|ому|им) шаблон\w*|шаблон(?:ом|а)? презентации|обязательный блок|"
     r"не забудь(?:те)?\b|привет,|use this (?:slide|layout|template)|this template|how to use)", re.I)
@@ -47,17 +48,19 @@ MEDIA_FILLER = re.compile(r"вставить|вставьте|insert|qr[- ]?(cod
 
 
 def _kw(name: str, text: str) -> bool:
+    """Текст содержит ключевое слово группы `name` (RU/EN)."""
     return re.search(KW[name], text, re.IGNORECASE) is not None
 
 
 def _pt(emu: int) -> float:
+    """EMU -> пункты."""
     return emu / EMU_PT
 
 
 def estimate_capacity(box: Box, size_pt: float, avail_h: int | None = None) -> tuple[int, int]:
-    """(max_chars, max_lines) for a text box using average glyph advance."""
+    """(max_chars, max_lines) для текстовой рамки по средней ширине глифа."""
     size = max(size_pt or 12.0, 4.0)
-    w_pt = max(_pt(box.w) - 14.4, size)  # default L/R insets 0.1"
+    w_pt = max(_pt(box.w) - 14.4, size)  # внутренние отступы слева/справа по умолчанию 0.1"
     h_pt = _pt(avail_h if avail_h is not None else box.h) - 7.2
     cpl = max(int(w_pt / (size * 0.55)), 1)
     lines = max(int(h_pt / (size * 1.2)), 1)
@@ -65,7 +68,7 @@ def estimate_capacity(box: Box, size_pt: float, avail_h: int | None = None) -> t
 
 
 # ----------------------------------------------------------------------------
-# Repeater detection
+# Поиск повторителей
 # ----------------------------------------------------------------------------
 def _signature_groups(texts: list[Element], slide_w: int) -> list[list[Element]]:
     groups: list[list[Element]] = []
@@ -80,7 +83,8 @@ def _signature_groups(texts: list[Element], slide_w: int) -> list[list[Element]]
             if abs(ref.box.w - t.box.w) > max(0.08 * max(ref.box.w, t.box.w), 0.01 * slide_w):
                 continue
             if ref.placeholder and t.placeholder and max(ref.box.h, t.box.h) > 2 * max(min(ref.box.h, t.box.h), 1):
-                continue  # placeholder frames are fixed: a header strip and a tall body are not the same item
+                # рамки плейсхолдеров фиксированы: полоса заголовка и высокое тело — не один и тот же элемент
+                continue
             g.append(t)
             placed = True
             break
@@ -90,7 +94,7 @@ def _signature_groups(texts: list[Element], slide_w: int) -> list[list[Element]]
 
 
 def _arrangement(members: list[Element], slide_w: int, slide_h: int) -> str | None:
-    """row / column / grid if members are laid out regularly and do not overlap."""
+    """Строка / колонка / сетка, если элементы расположены регулярно и не перекрываются."""
     boxes = [m.box for m in members]
     for i in range(len(boxes)):
         for j in range(i + 1, len(boxes)):
@@ -106,18 +110,19 @@ def _arrangement(members: list[Element], slide_w: int, slide_h: int) -> str | No
     if len(cols) == 1 and len(rows) == n:
         return "column"
     if len(rows) >= 2 and len(cols) >= 2 and len(rows) * len(cols) >= n >= max(len(rows), len(cols)):
-        # a real lattice: every row (except maybe the last) has the same number of cells
+        # настоящая решётка: в каждой строке (кроме, может быть, последней) одинаковое число ячеек
         counts = [len(r) for r in rows]
         if len(set(counts[:-1])) <= 1 and counts[-1] <= counts[0]:
             return "grid"
         return None
-    # staggered rows (e.g. zig-zag timelines): accept if x positions are distinct
+    # строки со сдвигом (например, зигзагообразные таймлайны): принимаем, если позиции x различны
     if len(cols) == n and n >= 3:
         return "row"
     return None
 
 
 def _cluster(values: list[float], tol: float) -> list[list[float]]:
+    """Группирует близкие значения (разница соседних не больше tol)."""
     out: list[list[float]] = []
     for v in sorted(values):
         if out and abs(out[-1][-1] - v) <= tol:
@@ -136,6 +141,7 @@ def _find_title(elements: list[Element], slide_h: int) -> Element | None:
         return None
 
     def dominant(cands: list[Element], ratio: float) -> Element | None:
+        """Самый крупный текст, если он заметно (в `ratio` раз) крупнее остальных."""
         if not cands:
             return None
         best = max(cands, key=lambda e: (e.font_size, -e.box.y))
@@ -144,8 +150,8 @@ def _find_title(elements: list[Element], slide_h: int) -> Element | None:
             return None
         return best
 
-    # 1) largest text in the upper band (content slides), 2) clearly dominant text anywhere
-    # (covers / dividers often put the title in the middle or lower half)
+    # 1) самый крупный текст в верхней полосе (содержательные слайды), 2) явно доминирующий текст где угодно
+    # (на обложках / разделителях заголовок часто стоит в середине или нижней половине)
     return dominant([e for e in texts if e.box.y < 0.35 * slide_h], 1.15) or dominant(texts, 1.3)
 
 
@@ -160,7 +166,8 @@ def detect_repeaters(elements: list[Element], title: Element | None, slide_w: in
             if arr:
                 reps.append((g, arr))
             else:
-                # irregular group: keep its largest aligned subset (a clean row or column)
+                # нерегулярная группа: оставляем её наибольшее выровненное подмножество (чистую строку или
+                # колонку)
                 cols = defaultdict(list)
                 rows = defaultdict(list)
                 for e in g:
@@ -171,7 +178,7 @@ def detect_repeaters(elements: list[Element], title: Element | None, slide_w: in
                     arr = _arrangement(best, slide_w, slide_h)
                     if arr:
                         reps.append((best, arr))
-    # icon/picture repeaters (e.g. icons over theses)
+    # повторители из иконок/картинок (например, иконки над тезисами)
     if not reps:
         return []
     reps.sort(key=lambda r: (-len(r[0]), -r[0][0].font_size, r[0][0].box.y))
@@ -181,7 +188,7 @@ def detect_repeaters(elements: list[Element], title: Element | None, slide_w: in
     region = anchors[0].box
     for a in anchors[1:]:
         region = region.union(a.box)
-    # spacing between anchors -> assignment radius
+    # расстояние между опорами -> радиус привязки
     xs = sorted({a.box.cx for a in anchors})
     ys = sorted({a.box.cy for a in anchors})
     dx = min((b - a for a, b in zip(xs, xs[1:]) if b - a > 0.02 * slide_w), default=slide_w)
@@ -192,17 +199,17 @@ def detect_repeaters(elements: list[Element], title: Element | None, slide_w: in
     for e in elements:
         if e is title or id(e) in anchor_ids or e.kind == "group" or e.brand:
             continue
-        if e.box.area > 0.5 * slide_w * slide_h:  # full-bleed backgrounds
+        if e.box.area > 0.5 * slide_w * slide_h:  # фоны во весь слайд
             continue
-        # card backgrounds: decor that contains exactly one anchor
+        # фоны карточек: декор, содержащий ровно одну опору
         containing = [i for i, a in enumerate(anchors) if e.box.contains(a.box, tol=int(0.005 * slide_w))]
         if len(containing) == 1 and e.kind in ("decor", "picture"):
             assigned[containing[0]].append(e)
             continue
         if len(containing) > 1:
-            continue  # shared container (panel behind all cards)
-        # nearest anchor within half spacing; along an axis without spacing (a single column or
-        # row of items) the gap between the boxes decides, not the slide size
+            continue  # общий контейнер (панель за всеми карточками)
+        # ближайшая опора в пределах половины шага; по оси без шага (одна колонка или
+        # строка элементов) решает зазор между рамками, а не размер слайда
         best, best_d = None, None
         for i, a in enumerate(anchors):
             ddx = abs(e.box.cx - a.box.cx)
@@ -237,16 +244,17 @@ def detect_repeaters(elements: list[Element], title: Element | None, slide_w: in
 
 
 # ----------------------------------------------------------------------------
-# Slot construction
+# Построение слотов
 # ----------------------------------------------------------------------------
 def _style(e: Element) -> TextStyle:
+    """Стиль текста слота из эффективного стиля элемента."""
     if not e.style:
         return TextStyle()
     return TextStyle(font=e.style.font, size=e.style.size, bold=e.style.bold, color_hex=e.style.color)
 
 
 def _avail_height(e: Element, elements: list[Element], slide_h: int, bottom_margin: int) -> int:
-    """For auto-growing boxes: vertical room until the next element below."""
+    """Для автоматически растущих рамок: место по вертикали до следующего элемента ниже."""
     if not e.autofit:
         return e.box.h
     limit = slide_h - bottom_margin
@@ -263,11 +271,12 @@ def _avail_height(e: Element, elements: list[Element], slide_h: int, bottom_marg
 
 
 def _style_differs(a, b) -> bool:
+    """Стили абзацев заметно различаются (кегль, насыщенность или цвет)."""
     return abs((a.size or 0) - (b.size or 0)) >= 1.0 or a.bold != b.bold or (a.color or "") != (b.color or "")
 
 
 def composite_roles(e: Element, in_item: bool) -> list[SlotRole]:
-    """Per-paragraph roles for multi-style text boxes, [] for homogeneous ones."""
+    """Роли по абзацам для текстовых рамок с несколькими стилями, [] для однородных."""
     if len(e.paragraphs) < 2 or len(e.para_styles) < 2 or not _style_differs(e.para_styles[0], e.para_styles[1]):
         return []
     first = e.paragraphs[0]
@@ -286,7 +295,7 @@ def _text_role_for_item(t: Element, siblings: list[Element]) -> SlotRole:
     if len(siblings) == 1:
         return SlotRole.item_text if len(t.text) > 25 or t.font_size < 13 else SlotRole.item_title
     if t.font_size == sizes[0] or (t.style and t.style.bold and t.font_size >= sizes[-1]):
-        # biggest (or bold) and short -> item title
+        # самый крупный (или жирный) и короткий -> заголовок элемента
         if len(t.text) <= 40:
             return SlotRole.item_title
     if re.search(r"текст|описани|пояснени|text|description|lorem", t.text, re.I):
@@ -300,7 +309,7 @@ COVER_KINDS = {PatternKind.title, PatternKind.section, PatternKind.thanks, Patte
 
 
 def _cover_cleanup(slots: list[Slot], repeaters: list[Repeater], title_slot: Slot | None, slide_h: int) -> list[Repeater]:
-    """Covers/dividers have no items: re-role any repeater slots to free roles."""
+    """У обложек/разделителей нет элементов: слоты повторителей получают свободные роли."""
     for s in slots:
         if s.item_index is None:
             continue
@@ -318,8 +327,9 @@ def _cover_cleanup(slots: list[Slot], repeaters: list[Repeater], title_slot: Slo
 
 
 def _containers(slots: list[Slot], elements: list[Element], slide_w: int, slide_h: int) -> dict[str, list[int]]:
-    """Decor shapes that only exist to frame a slot (card behind a text, photo frame
-    next to a speaker name). They are removed together with an unused slot."""
+    """Декоративные фигуры, которые существуют только как обрамление слота (карточка за текстом, рамка фото
+    рядом с именем спикера). Удаляются вместе с неиспользованным слотом.
+    """
     out: dict[str, list[int]] = {}
     area = slide_w * slide_h
     decor = [e for e in elements if e.kind == "decor" and e.box.area < 0.25 * area]
@@ -331,7 +341,7 @@ def _containers(slots: list[Slot], elements: list[Element], slide_w: int, slide_
             if d.box.contains(s.box, tol=int(0.004 * slide_w)):
                 ids.append(d.shape_id)
             elif s.role in (SlotRole.person, SlotRole.caption, SlotRole.label, SlotRole.decor):
-                # photo frame / avatar circle beside the text
+                # рамка фото / круг аватара рядом с текстом
                 v_overlap = min(d.box.b, s.box.b) - max(d.box.y, s.box.y)
                 gap = s.box.x - d.box.r
                 if v_overlap > 0.3 * min(d.box.h, s.box.h) and 0 <= gap < 0.6 * max(d.box.w, s.box.h) and d.box.w < 0.12 * slide_w:
@@ -342,9 +352,10 @@ def _containers(slots: list[Slot], elements: list[Element], slide_w: int, slide_
 
 
 def _stacked_frames(slots: list[Slot]) -> None:
-    """A card-sized frame that contains the next text frame of the same item (title box
-    spanning the whole card, body box inside it) only owns the space above that frame:
-    its box and capacity are cut there, so a long heading cannot run into the body."""
+    """Рамка размером с карточку, содержащая следующую текстовую рамку того же элемента (рамка заголовка на
+    всю карточку, рамка тела внутри неё), владеет только местом над этой рамкой: её рамка и вместимость
+    обрезаются там, поэтому длинный заголовок не заходит на тело.
+    """
     groups: dict[int, list[Slot]] = {}
     for s in slots:
         if s.kind == "text" and s.item_index is not None and not s.para_roles:
@@ -363,9 +374,10 @@ def _stacked_frames(slots: list[Slot]) -> None:
 
 
 def _backdrops(slots: list[Slot], elements: list[Element], slide_w: int, slide_h: int) -> dict[str, int]:
-    """Filled badge behind a title or subtitle, sized to the example's words (a plate the
-    text starts on, narrower than the text frame). The builder resizes it to the new text,
-    otherwise a longer title runs off its badge."""
+    """Залитая плашка за заголовком или подзаголовком, подогнанная под слова примера (подложка, на которой
+    начинается текст, уже текстовой рамки). Сборщик подгоняет её под новый текст, иначе более длинный
+    заголовок выходит за плашку.
+    """
     out: dict[str, int] = {}
     tol = int(0.02 * slide_w)
     for s in slots:
@@ -377,11 +389,11 @@ def _backdrops(slots: list[Slot], elements: list[Element], slide_w: int, slide_h
                 continue
             b = d.box
             if b.w >= 0.9 * s.box.w or not 0.6 * s.box.h <= b.h <= 3 * s.box.h:
-                continue  # full-width bars and cards are not badges
+                continue  # полосы и карточки во всю ширину — не плашки
             if min(b.b, s.box.b) - max(b.y, s.box.y) < 0.8 * min(b.h, s.box.h):
-                continue  # must cover the text band
+                continue  # должна накрывать полосу текста
             if not (s.box.x - 3 * tol <= b.x <= s.box.x + tol and b.r > s.box.x + 2 * tol):
-                continue  # must start where the text starts
+                continue  # должна начинаться там, где начинается текст
             if best is None or b.area < best.box.area:
                 best = d
         if best is not None:
@@ -417,7 +429,7 @@ def build_pattern(
                 in_items[t.shape_id] = (i, role)
                 roles.append(role)
             roles_per_item.append(roles)
-        # picture slots inside items (icons / photos)
+        # слоты картинок внутри элементов (иконки / фото)
         for i, members in info["assigned"].items():
             for m in members:
                 if m.kind == "picture":
@@ -428,7 +440,7 @@ def build_pattern(
     title_bottom = title.box.b if title else int(0.18 * slide_h)
     for e in elements:
         if e.kind in ("group", "line") or e.brand:
-            continue  # brand texts (footers, page numbers, repeated notices) stay untouched
+            continue  # брендовые тексты (колонтитулы, номера страниц, повторяющиеся пометки) не трогаются
         sid = f"{pid}.s{e.shape_id}"
         if title is not None and e is title:
             mc, ml = estimate_capacity(e.box, e.font_size, _avail_height(e, elements, slide_h, bottom_margin))
@@ -449,7 +461,8 @@ def build_pattern(
                 idx = None
                 big_content_ph = e.placeholder in ("BODY", "OBJECT") and e.box.area > 0.12 * slide_w * slide_h
                 if big_content_ph:
-                    role = SlotRole.body  # a large content placeholder is the body even right under the title
+                    # крупный плейсхолдер контента — тело, даже если стоит сразу под заголовком
+                    role = SlotRole.body
                 elif e.placeholder in ("SUBTITLE",) or (
                     title is not None and e.box.y >= title.box.y and e.box.y - title_bottom < 0.08 * slide_h
                     and e.font_size < title.font_size and len(e.paragraphs) <= 2 and e.box.x <= title.box.x + 0.05 * slide_w
@@ -488,7 +501,7 @@ def build_pattern(
 
     kind, reason, tags, score = classify(elements, slots, repeaters, title, layout_name, slide_index, slide_w, slide_h)
     if repeaters:
-        # items must share one slot composition; otherwise the example is a one-off collage
+        # у элементов должна быть одна композиция слотов; иначе пример — разовый коллаж
         per_item: dict[int, list[str]] = {}
         for s in slots:
             if s.item_index is not None and s.kind == "text":
@@ -502,7 +515,7 @@ def build_pattern(
     tags = tags + [f"chart:{e.chart_type}" for e in elements if e.kind == "chart" and e.chart_type]
     graphics = {e.graphic for e in elements if e.graphic}
     if graphics & {"smartart", "ole"}:
-        # SmartArt / OLE sample content cannot be refilled -> the example would leak template text
+        # содержимое SmartArt / OLE нельзя перезаполнить -> в колоду утёк бы текст шаблона
         score *= 0.25
         tags = tags + sorted(graphics)
         reason += f"; contains {', '.join(sorted(graphics))}"
@@ -537,7 +550,7 @@ def build_pattern(
 
 
 # ----------------------------------------------------------------------------
-# Classification
+# Классификация
 # ----------------------------------------------------------------------------
 def classify(elements, slots, repeaters, title, layout_name, slide_index, slide_w, slide_h):
     texts = [e for e in elements if e.kind == "text" and e.text]
@@ -548,12 +561,12 @@ def classify(elements, slots, repeaters, title, layout_name, slide_index, slide_
     tags: list[str] = []
     area = slide_w * slide_h
 
-    # --- template documentation / asset libraries ---------------------------
+    # --- документация шаблона / библиотеки ресурсов -------------------------------
     small_pics = [p for p in pics if p.is_icon]
     if len(pics) >= 30 and len(small_pics) >= 0.7 * len(pics):
         return PatternKind.guide, f"icon library: {len(small_pics)} small pictures", ["icons"], 0.0
     if len(pics) >= 10 and len(texts) < 0.5 * len(pics) and all(p.box.area < 0.03 * area for p in pics):
-        # logo wall / asset sheet: its pictures are sample content that must not reach a deck
+        # стена логотипов / лист ресурсов: его картинки — образцы, которые не должны попасть в колоду
         return PatternKind.guide, f"asset sheet: {len(pics)} small pictures, {len(texts)} texts", ["assets"], 0.0
     mono = [e for e in texts if e.is_mono and re.search(r"[{};:]", e.text)]
     if mono:
@@ -563,9 +576,9 @@ def classify(elements, slots, repeaters, title, layout_name, slide_index, slide_
         return PatternKind.guide, "palette/typography specimen", ["palette"], 0.0
     codes = set(re.findall(r"(?:#|\bHEX\s*#?|\bRGB\s*)([0-9A-Fa-f]{6})\b", all_text))
     if len(codes) >= 3:
-        # style guide: the slide documents the brand colours (swatches of any shape + their codes)
+        # руководство по стилю: слайд документирует фирменные цвета (образцы любой формы + их коды)
         return PatternKind.guide, f"style guide: {len(codes)} colour codes", ["palette"], 0.0
-    # instructions addressed to the template user ("используй слайд 7", "replace this text")
+    # инструкции, обращённые к пользователю шаблона («используй слайд 7», «replace this text»)
     instr = set(m.lower() for m in INSTRUCTION_RE.findall(all_text))
     if len(instr) >= 2 and len(all_text) > 80:
         return PatternKind.guide, f"instructions to the template user ({', '.join(sorted(instr)[:3])})", ["instructions"], 0.0
@@ -588,8 +601,8 @@ def classify(elements, slots, repeaters, title, layout_name, slide_index, slide_
         return PatternKind.team, "several person name slots", tags, 0.6
     if _kw("team", lname) and n_items < 2:
         return PatternKind.team, "person card layout (визитка/speaker)", tags, 0.5
-    # tables / charts drawn with plain shapes: reuse is fragile -> low prior,
-    # the composer builds native tables/charts in the template style instead
+    # таблицы / диаграммы, нарисованные простыми фигурами: переиспользование хрупкое -> низкий приоритет,
+    # вместо этого компоновщик строит нативные таблицы/диаграммы в стиле шаблона
     grid_texts = [e for e in texts if e is not title and len(e.text) <= 40]
     card_grid = bool(repeaters) and repeaters[0].direction in ("grid", "row") and n_items < 9
     if len(grid_texts) >= 12 and not card_grid:

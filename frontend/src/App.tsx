@@ -7,10 +7,12 @@ import Skills from './pages/Skills'
 type Tab = 'generate' | 'templates' | 'skills'
 
 export default function App() {
+  // оболочка интерфейса: вкладки и индикаторы подключённых моделей (LLM, VLM, генерация изображений)
   const [tab, setTab] = useState<Tab>('generate')
   const [health, setHealth] = useState<{ llm: string; vlm: string | null; t2i: string | null } | null>(null)
 
   useEffect(() => {
+    // какие модели подключены на сервере (или офлайн-режим)
     api.health().then(setHealth).catch(() => setHealth(null))
   }, [])
 

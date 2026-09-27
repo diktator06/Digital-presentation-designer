@@ -1,6 +1,6 @@
-"""Runtime configuration: one YAML file (+ ${ENV:-default} interpolation).
+"""Конфигурация времени выполнения: один YAML-файл (+ подстановка ${ENV:-default}).
 
-Resolution order: explicit path -> $DECKSMITH_CONFIG -> config/default.yaml.
+Порядок поиска: явный путь -> $DECKSMITH_CONFIG -> config/default.yaml.
 """
 from __future__ import annotations
 
@@ -17,8 +17,9 @@ _ENV_RE = re.compile(r"\$\{([A-Z0-9_]+)(?::-([^}]*))?\}")
 
 
 def _load_dotenv(path: Path = ROOT / ".env") -> None:
-    """KEY=VALUE lines of the project's (gitignored) .env become environment defaults, as
-    docker-compose does with env_file; variables already set in the environment win."""
+    """Строки KEY=VALUE из .env проекта (не в git) становятся значениями окружения по умолчанию, как делает
+    docker-compose с env_file; переменные, уже заданные в окружении, важнее.
+    """
     if not path.exists():
         return
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -35,6 +36,7 @@ _load_dotenv()
 
 
 def _interpolate(value):
+    """Подставляет ${ENV:-default} во все строки конфигурации."""
     if isinstance(value, str):
         return _ENV_RE.sub(lambda m: os.environ.get(m.group(1), m.group(2) or ""), value)
     if isinstance(value, dict):
@@ -49,16 +51,19 @@ class LLMConfig(BaseModel):
     base_url: str = ""
     api_key: str = ""
     model: str = "Qwen/Qwen3-32B"
-    vlm_model: str = ""  # multimodal model for visual audit / template labelling
+    vlm_model: str = ""  # мультимодальная модель для визуального аудита / разметки шаблона
     max_concurrency: int = 8
-    max_rps: float = 0.0  # request starts per second per key (0 = no limit); hosted APIs cap it
+    # стартов запросов в секунду на ключ (0 = без ограничения); хостинговые API его ограничивают
+    max_rps: float = 0.0
     timeout_s: float = 120.0
     temperature: float = 0.3
     max_retries: int = 2
-    extra_body: dict = Field(default_factory=dict)  # e.g. {"chat_template_kwargs": {"enable_thinking": false}}
+    # например, {"chat_template_kwargs": {"enable_thinking": false}}
+    extra_body: dict = Field(default_factory=dict)
 
     @property
     def enabled(self) -> bool:
+        """Модель подключена: не офлайн, заданы endpoint и имя модели."""
         return self.provider != "offline" and bool(self.base_url) and bool(self.model)
 
 
@@ -95,6 +100,7 @@ class PathsConfig(BaseModel):
     assets: str = "assets"
 
     def resolve(self, p: str) -> Path:
+        """Путь относительно корня проекта."""
         path = Path(p)
         return path if path.is_absolute() else ROOT / path
 
@@ -108,20 +114,24 @@ class Settings(BaseModel):
 
     @property
     def workspace(self) -> Path:
+        """Рабочий каталог (создаётся при необходимости)."""
         p = self.paths.resolve(self.paths.workspace)
         p.mkdir(parents=True, exist_ok=True)
         return p
 
     @property
     def skills_dir(self) -> Path:
+        """Каталог скиллов."""
         return self.paths.resolve(self.paths.skills)
 
     @property
     def assets_dir(self) -> Path:
+        """Каталог ресурсов (иконки и т. п.)."""
         return self.paths.resolve(self.paths.assets)
 
 
 def load_settings(path: str | Path | None = None) -> Settings:
+    """Читает YAML настроек (явный путь -> $DECKSMITH_CONFIG -> config/default.yaml)."""
     path = path or os.environ.get("DECKSMITH_CONFIG") or ROOT / "config" / "default.yaml"
     path = Path(path)
     data = {}
@@ -133,10 +143,12 @@ def load_settings(path: str | Path | None = None) -> Settings:
 
 @lru_cache(maxsize=1)
 def settings() -> Settings:
+    """Текущие настройки (с кэшем)."""
     return load_settings()
 
 
 def override_settings(path: str | Path) -> Settings:
+    """Переключает настройки на другой YAML (сбрасывает кэш)."""
     settings.cache_clear()
     os.environ["DECKSMITH_CONFIG"] = str(path)
     return settings()

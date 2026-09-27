@@ -1,4 +1,4 @@
-"""Audit: every deterministic check catches an injected defect, and its fixer removes it."""
+"""Аудит: каждая детерминированная проверка ловит внесённый дефект, а её фиксер его устраняет."""
 import asyncio
 
 import pytest
@@ -16,7 +16,7 @@ pytestmark = pytest.mark.slow
 
 
 def _defective_deck(profile, path):
-    """One slide per defect, on the template's own canvas layout."""
+    """Один слайд на дефект, на собственном макете-холсте шаблона."""
     prs = Presentation(profile.file)
     lst = prs.slides._sldIdLst
     for sid in list(lst):
@@ -26,6 +26,7 @@ def _defective_deck(profile, path):
     W, H = prs.slide_width, prs.slide_height
 
     def slide(title):
+        """Новый слайд с заголовком на макете-холсте."""
         s = prs.slides.add_slide(layout)
         for ph in list(s.placeholders):
             if "TITLE" in str(ph.placeholder_format.type):
@@ -35,6 +36,7 @@ def _defective_deck(profile, path):
         return s
 
     def card(s, x, y, w, h):
+        """Карточка-подложка."""
         c = s.shapes.add_shape(1, Emu(int(x)), Emu(int(y)), Emu(int(w)), Emu(int(h)))
         c.fill.solid()
         c.fill.fore_color.rgb = RGBColor(0xEE, 0xF2, 0xF8)
@@ -42,6 +44,7 @@ def _defective_deck(profile, path):
         return c
 
     def tb(s, x, y, w, h, text, size=14, color=None, font=None):
+        """Текстовый блок с заданным кеглем, цветом и шрифтом."""
         t = s.shapes.add_textbox(Emu(int(x)), Emu(int(y)), Emu(int(w)), Emu(int(h)))
         t.text_frame.word_wrap = True
         paras = text if isinstance(text, list) else [text]
@@ -75,7 +78,7 @@ def _defective_deck(profile, path):
         for c in range(6):
             t.table.cell(r, c).text = str(r * c)
     s = slide("Пустой слайд с заголовком")  # 7
-    s = slide("Таблица на 9 строк")  # 8: allowed (organisers: up to 10 rows is not an error)
+    s = slide("Таблица на 9 строк")  # 8: допустимо (организаторы: до 10 строк — не ошибка)
     t = s.shapes.add_table(9, 4, Emu(int(W * 0.1)), Emu(int(H * 0.25)), Emu(int(W * 0.8)), Emu(int(H * 0.6)))
     for r in range(9):
         for c in range(4):
@@ -94,6 +97,7 @@ def _defective_deck(profile, path):
 
 @pytest.fixture(scope="module")
 def defective(profiles, tmp_path_factory):
+    """Колода с внесёнными дефектами, её рендер и отчёт аудита."""
     prof = profiles["vk_education"]
     p = _defective_deck(prof, tmp_path_factory.mktemp("audit") / "defects.pptx")
     pdf, pngs = render_pptx(p, p.parent / "render")
@@ -112,12 +116,13 @@ def defective(profiles, tmp_path_factory):
     ("integrity.empty", 7),
 ])
 def test_check_detects_injected_defect(defective, check, slide):
+    """Каждая проверка находит свой внесённый дефект."""
     _, _, rep = defective
     assert any(i.check == check and i.slide == slide for i in rep.issues), f"{check} missed on slide {slide + 1}"
 
 
 def test_organisers_clarifications(defective):
-    """Tables up to 10 rows pass; text may outgrow its frame only inside its block."""
+    """Таблицы до 10 строк проходят; текст может перерасти рамку только внутри своего блока."""
     _, _, rep = defective
     found = {(i.check, i.slide) for i in rep.issues}
     assert ("density.table", 8) not in found, "a 9-row table is allowed"
@@ -126,6 +131,7 @@ def test_organisers_clarifications(defective):
 
 
 def test_overflowing_frame_grows_inside_its_block(defective, tmp_path):
+    """Переполненная рамка растёт внутри своего блока, а не уменьшает кегль."""
     prof, p, rep = defective
     iss = [i for i in rep.issues if i.check == "layout.text_overflow" and i.slide == 10]
     out = tmp_path / "grown.pptx"
@@ -139,12 +145,14 @@ def test_overflowing_frame_grows_inside_its_block(defective, tmp_path):
 
 
 def test_issues_carry_boxes_for_visualisation(defective):
+    """Замечания несут рамки для подсветки на слайде."""
     _, _, rep = defective
     boxed = [i for i in rep.issues if i.check in ("layout.out_of_bounds", "layout.overlap", "template.contrast")]
     assert boxed and all(i.boxes for i in boxed)
 
 
 def test_fixers_resolve_selected_issues(defective, tmp_path):
+    """Выбранные исправления устраняют замечания при повторном аудите."""
     prof, p, rep = defective
     fixable = [i for i in rep.issues if i.fixable and i.deterministic and i.check in
                ("layout.out_of_bounds", "integrity.placeholder_text", "density.bullets", "template.contrast", "template.font", "density.table")]
@@ -160,6 +168,7 @@ def test_fixers_resolve_selected_issues(defective, tmp_path):
 
 
 def test_catalogue_separates_deterministic_and_contextual():
+    """Каталог разделяет детерминированные и контекстные проверки."""
     cat = catalogue()
     assert any(c["deterministic"] for c in cat) and any(not c["deterministic"] for c in cat)
     assert len([c for c in cat if c["deterministic"]]) >= 20

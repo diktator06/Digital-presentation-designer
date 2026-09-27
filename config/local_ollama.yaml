@@ -1,5 +1,5 @@
-# Local run on Ollama (OpenAI-compatible endpoint), e.g. `ollama pull qwen3:4b`.
-# Qwen3 thinking is switched off with reasoning_effort=none (Ollama); vLLM uses chat_template_kwargs instead.
+# Локальный запуск на Ollama (OpenAI-совместимый endpoint), например `ollama pull qwen3:4b`.
+# «Размышления» Qwen3 выключаются через reasoning_effort=none (Ollama); vLLM вместо этого использует chat_template_kwargs.
 llm:
   provider: openai_compatible
   base_url: http://localhost:11434/v1
