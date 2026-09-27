@@ -7,7 +7,6 @@ accessibility, keyboard navigation and an overview grid.
 from __future__ import annotations
 
 import html
-import json
 from pathlib import Path
 
 import pymupdf
@@ -70,7 +69,3 @@ def to_html(pdf: str | Path, pptx: str | Path, out: str | Path, title: str, acce
     return out
 
 
-def export_manifest(out_dir: Path, files: dict[str, str]) -> Path:
-    p = out_dir / "exports.json"
-    p.write_text(json.dumps(files, ensure_ascii=False, indent=1), encoding="utf-8")
-    return p

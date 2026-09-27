@@ -4,7 +4,7 @@ Layer contracts:
   parsing   : .pptx            -> TemplateProfile
   content   : files            -> ContentCorpus
   generation: brief + corpus   -> DeckPlan
-  layout    : plan + profile   -> DeckLayout (per variant)  -> .pptx
+  layout    : plan + profile   -> list[SlideLayout] (per variant) -> .pptx
   audit     : .pptx + profile  -> AuditReport
   export    : .pptx            -> .pdf / .html
 
@@ -67,10 +67,6 @@ class Box(BaseModel):
     def union(self, other: "Box") -> "Box":
         x, y = min(self.x, other.x), min(self.y, other.y)
         return Box(x=x, y=y, w=max(self.r, other.r) - x, h=max(self.b, other.b) - y)
-
-    def inset(self, dx: int, dy: int | None = None) -> "Box":
-        dy = dx if dy is None else dy
-        return Box(x=self.x + dx, y=self.y + dy, w=max(self.w - 2 * dx, 0), h=max(self.h - 2 * dy, 0))
 
 
 # ----------------------------------------------------------------------------
@@ -421,12 +417,6 @@ class SlideLayout(BaseModel):
     fills: list[SlotFill] = Field(default_factory=list)
     visuals: list[VisualSpec] = Field(default_factory=list)
     rationale: str = ""
-
-
-class DeckLayout(BaseModel):
-    variant: str
-    template_id: str
-    slides: list[SlideLayout]
 
 
 # ----------------------------------------------------------------------------

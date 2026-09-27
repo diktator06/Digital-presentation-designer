@@ -116,11 +116,6 @@ def pdf_to_pngs(pdf: str | Path, out_dir: str | Path, dpi: int = 96, prefix: str
     return paths
 
 
-def pdf_to_svgs(pdf: str | Path) -> list[str]:
-    with pymupdf.open(pdf) as doc:
-        return [page.get_svg_image(text_as_path=False) for page in doc]
-
-
 def render_pptx(pptx: str | Path, out_dir: str | Path, dpi: int = 96) -> tuple[Path, list[Path]]:
     """Render a deck: returns (pdf_path, [png per slide])."""
     out_dir = Path(out_dir)

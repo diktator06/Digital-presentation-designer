@@ -7,14 +7,12 @@ UI can show before/after and roll back.
 from __future__ import annotations
 
 import logging
-import re
 from pathlib import Path
 
 from pptx import Presentation
-from pptx.dml.color import RGBColor
 from pptx.oxml.ns import qn
 
-from decksmith.audit.rules import PLACEHOLDER_RE, color_in_palette
+from decksmith.audit.rules import PLACEHOLDER_RE
 from decksmith.core.models import TABLE_MAX_COLS, TABLE_MAX_ROWS, AuditIssue, TemplateProfile
 from decksmith.generation.llm import LLMClient
 from decksmith.generation.skills import load_skill

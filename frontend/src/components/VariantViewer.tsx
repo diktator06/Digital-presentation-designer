@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, CAT_RU, KIND_RU, SEV_RU, type AuditIssue, type Run, type Variant } from '../api'
-import { scoreClass } from '../pages/Generate'
+import { scoreClass } from '../score'
 
 type Props = { run: Run; variant: Variant; initialSlide: number; onBack: () => void; onUpdate: (v: Variant) => void }
 
@@ -17,13 +17,16 @@ export default function VariantViewer({ run, variant, initialSlide, onBack, onUp
     api.template(run.request.template_id).then((t) => setDims({ w: t.tokens.slide_w, h: t.tokens.slide_h }))
   }, [run.request.template_id])
 
-  const issues = variant.audit?.issues ?? []
+  const issues = useMemo(() => variant.audit?.issues ?? [], [variant.audit])
   const perSlide = useMemo(() => {
     const m: Record<number, AuditIssue[]> = {}
     issues.forEach((i) => (m[i.slide] ||= []).push(i))
     return m
   }, [issues])
-  const visible = issues.filter((i) => (!onlySlide || i.slide === slide) && (showInfo || i.severity !== 'info'))
+  const visible = useMemo(
+    () => issues.filter((i) => (!onlySlide || i.slide === slide) && (showInfo || i.severity !== 'info')),
+    [issues, onlySlide, slide, showInfo],
+  )
   const hiddenInfo = showInfo ? 0 : issues.filter((i) => (!onlySlide || i.slide === slide) && i.severity === 'info').length
   const groups = useMemo(() => {
     const g: Record<string, AuditIssue[]> = {}

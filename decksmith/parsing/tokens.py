@@ -36,11 +36,6 @@ def merge_colors(counter: Counter, threshold: float = 28.0) -> list[tuple[str, f
     return [(h, w) for h, w in merged]
 
 
-def _hue(h: str) -> float:
-    r, g, b = (c / 255 for c in hex_to_rgb(h))
-    return colorsys.rgb_to_hls(r, g, b)[0]
-
-
 def _shift(h: str, dh: float = 0.0, dl: float = 0.0) -> str:
     from decksmith.parsing.ooxml import rgb_to_hex
 

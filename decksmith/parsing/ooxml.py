@@ -550,24 +550,6 @@ def background_hex(container, theme: Theme) -> str | None:
     return None
 
 
-def has_picture_background(container) -> bool:
-    csld = container._element.find(qn("p:cSld"))
-    bg = csld.find(qn("p:bg")) if csld is not None else None
-    if bg is None:
-        return False
-    return bg.find(".//" + qn("a:blipFill")) is not None
-
-
-def effective_background(slide, theme: Theme) -> str:
-    for c in (slide, getattr(slide, "slide_layout", None), getattr(getattr(slide, "slide_layout", None), "slide_master", None)):
-        if c is None:
-            continue
-        h = background_hex(c, theme)
-        if h:
-            return h
-    return theme.scheme("bg1") or "FFFFFF"
-
-
 _FILLS = ("solidFill", "gradFill", "blipFill", "pattFill")
 
 

@@ -7,7 +7,6 @@ grouped by role, which PowerPoint/LibreOffice/Keynote all edit natively.
 """
 from __future__ import annotations
 
-import colorsys
 from dataclasses import dataclass
 
 from lxml import etree

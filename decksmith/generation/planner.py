@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from collections import Counter
 
 from pydantic import BaseModel, Field
 
@@ -602,7 +601,3 @@ async def make_plan(brief: Brief, corpus: ContentCorpus, profile: TemplateProfil
     return plan_offline(brief, corpus), "offline"
 
 
-def dominant_language(plan: DeckPlan) -> str:
-    text = " ".join([s.title for s in plan.slides] + [b for s in plan.slides for b in s.bullets])
-    c = Counter("cyr" if re.match(r"[а-яё]", ch, re.I) else "lat" for ch in text if ch.isalpha())
-    return "ru" if c["cyr"] >= c["lat"] else "en"

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, type ContentPack, type Run, type RunEvent, type TemplateCard, type Variant } from '../api'
 import VariantViewer from '../components/VariantViewer'
+import { scoreClass } from '../score'
 
 const LAST_RUN = 'decksmith.lastRun'
 
@@ -24,11 +25,6 @@ function fmt(s: number) {
   const m = Math.floor(s / 60)
   const r = Math.floor(s % 60)
   return `${m}:${r.toString().padStart(2, '0')}`
-}
-
-export function scoreClass(s?: number | null) {
-  if (s == null) return ''
-  return s >= 85 ? 'good' : s >= 65 ? 'mid' : 'bad'
 }
 
 export default function Generate() {

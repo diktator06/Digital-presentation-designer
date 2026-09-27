@@ -215,7 +215,7 @@ async def _publish(run_id: str, ev: dict) -> None:
         await q.put(ev)
 
 
-def _variant_payload(v, run_dir: Path) -> dict:
+def _variant_payload(v) -> dict:
     from decksmith.layout.selector import load_variants
 
     return {
@@ -242,7 +242,7 @@ async def _run_job(run_id: str, req: RunRequest) -> None:
         RUNS[run_id].update({
             "status": "done", "elapsed_s": round(time.time() - t0, 1), "plan": json.loads(res.plan.model_dump_json()),
             "plan_mode": res.plan_mode, "timings": res.timings, "manifest": _url(res.manifest),
-            "variants": [_variant_payload(v, Path(res.dir)) for v in res.variants],
+            "variants": [_variant_payload(v) for v in res.variants],
         })
     except Exception as e:
         log.exception("run failed")

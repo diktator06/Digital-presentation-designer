@@ -14,7 +14,7 @@ from pptx.enum.shapes import MSO_SHAPE_TYPE
 from pptx.oxml.ns import qn
 
 from decksmith.core.models import Box, DesignTokens
-from decksmith.layout.textfit import DEFAULT_INSET_LR, measure, measure_rich
+from decksmith.layout.textfit import DEFAULT_INSET_LR, measure_rich
 from decksmith.parsing.elements import text_anchor, text_insets
 from decksmith.parsing.ooxml import EffStyle, StyleResolver, flatten_shapes, parse_theme
 

@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import math
 import sys
 import time
 import traceback
@@ -35,7 +34,7 @@ def run_one(template: str, out_dir: str, plan_path: str) -> dict:
     from decksmith.audit.engine import run_audit
     from decksmith.core.models import DeckPlan
     from decksmith.layout.builder import DeckBuilder
-    from decksmith.layout.selector import load_variants, select_layouts
+    from decksmith.layout.selector import load_variants
     from decksmith.parsing.template_parser import analyze_template
     from decksmith.pipeline import icons_for_plan, plan_variants
     from decksmith.render.soffice import pdf_to_pngs, pptx_to_pdf

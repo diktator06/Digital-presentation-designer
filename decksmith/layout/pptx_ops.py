@@ -80,14 +80,6 @@ def delete_slides(prs, indices: list[int]) -> None:
         lst.remove(sld)
 
 
-def move_slide(prs, old: int, new: int) -> None:
-    lst = prs.slides._sldIdLst
-    ids = list(lst)
-    el = ids[old]
-    lst.remove(el)
-    lst.insert(new, el)
-
-
 # ----------------------------------------------------------------------------
 # Shapes
 # ----------------------------------------------------------------------------
@@ -226,19 +218,6 @@ def scale_paragraph_sizes(shape, indices: list[int], factor: float, default_size
         for el in list(paras[i].iter(qn("a:rPr"))) + list(paras[i].iter(qn("a:endParaRPr"))):
             cur = int(el.get("sz")) / 100 if el.get("sz") else default_size
             el.set("sz", str(int(round(cur * factor * 100))))
-
-
-def disable_autofit(shape) -> None:
-    txb = shape._element.find(qn("p:txBody"))
-    if txb is None:
-        return
-    bp = txb.find(qn("a:bodyPr"))
-    if bp is None:
-        return
-    for tag in ("a:normAutofit", "a:spAutoFit", "a:noAutofit"):
-        for e in bp.findall(qn(tag)):
-            bp.remove(e)
-    etree.SubElement(bp, qn("a:noAutofit"))
 
 
 # ----------------------------------------------------------------------------

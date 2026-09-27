@@ -14,7 +14,6 @@ different weak spot of template parsing:
 from __future__ import annotations
 
 import copy
-import re
 from pathlib import Path
 
 from lxml import etree
@@ -247,5 +246,3 @@ def generate_all(out_dir: str | Path) -> dict[str, Path]:
     return {name: fn(out / f"synthetic_{name}.pptx") for name, fn in GENERATORS.items()}
 
 
-def safe_name(s: str) -> str:
-    return re.sub(r"[^\w.-]+", "_", s)

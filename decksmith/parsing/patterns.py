@@ -19,7 +19,7 @@ import re
 from collections import defaultdict
 
 from decksmith.core.models import Box, Pattern, PatternKind, Repeater, Slot, SlotRole, TextStyle
-from decksmith.parsing.elements import Element, is_filler_text, is_numberish
+from decksmith.parsing.elements import Element, is_numberish
 
 EMU_PT = 12700
 

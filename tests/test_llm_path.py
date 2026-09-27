@@ -4,7 +4,6 @@ the JSON-repair round, visual-audit mapping and contextual fixes."""
 import asyncio
 from pathlib import Path
 
-import pytest
 
 from decksmith.core.config import LLMConfig, settings
 from decksmith.testing.llm_emulator import Emulator
