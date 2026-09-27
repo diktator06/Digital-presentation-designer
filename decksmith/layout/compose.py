@@ -462,7 +462,9 @@ def draw_kpis(slide, box: Box, items: list[Item], st: Style):
     for it, c in zip(items, cells):
         nh = int(min(c.h * 0.45, num_size * 12700 * 1.25))
         value = it.value or it.title
-        num_font_size = fit_font_size([value], st.heading_font, min(num_size, nh / 12700 / 1.2), c.w, nh, True, 0.4) or num_size * 0.5
+        # плитка без числа показывает заголовок кеглем заголовка, а не кеглем числа
+        start = min(num_size, nh / 12700 / 1.2) if it.value else min(st.size("title"), nh / 12700 / 1.2)
+        num_font_size = fit_font_size([value], st.heading_font, start, c.w, nh, True, 0.4) or start * 0.5
         num_font_size = snap_down(num_font_size, st.tokens.type_scale.sizes)
         add_text(slide, Box(x=c.x, y=c.y, w=c.w, h=nh), [value], st, role="number", color=st.accent_text, bold=True,
                  size=num_font_size, fit=False, name="KPI value")

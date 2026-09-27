@@ -87,3 +87,11 @@ def test_contextual_fix_via_fixer_skill(profiles, tmp_path):
     assert res["contextual_changed"] >= 1
     texts = [sh.text_frame.text for sh in Presentation(str(tmp_path / "fixed.pptx")).slides[0].shapes if sh.has_text_frame]
     assert "Исправленный заголовок-вывод" in texts
+    # правка возвращается парой «было -> стало»: по ней план для повторного аудита получает новый текст
+    from decksmith.core.models import DeckPlan, SlideSpec
+    from decksmith.pipeline import apply_rewrites
+
+    old, new = res["rewrites"][0]
+    plan = DeckPlan(title="t", slides=[SlideSpec(id="s1", intent="title", title=old[0])])
+    assert new == ["Исправленный заголовок-вывод"]
+    assert apply_rewrites(plan, res["rewrites"]).slides[0].title == "Исправленный заголовок-вывод"

@@ -51,6 +51,7 @@ class VariantResult:
     pngs: list[str] = field(default_factory=list)
     audit: AuditReport | None = None
     audit_before_fix: dict | None = None
+    plan: DeckPlan | None = None  # план варианта, по которому идёт аудит (и повторный аудит после правок)
     slides: list[dict] = field(default_factory=list)
     timings: dict[str, float] = field(default_factory=dict)
     error: str = ""
@@ -317,6 +318,8 @@ class Pipeline:
                 vr.timings["autofix"] = round(time.time() - ts, 2)
                 await _emit(emit, stage="autofix", variant=v.name, status="done", score=audit.score, t=round(time.time() - t0, 2))
             vr.audit = audit
+            vr.plan = vplan
+            (vdir / "plan.json").write_text(vplan.model_dump_json(indent=1), encoding="utf-8")
             (vdir / "audit.json").write_text(audit.model_dump_json(indent=1), encoding="utf-8")
 
             ts = time.time()

@@ -21,7 +21,7 @@ from pydantic import BaseModel
 
 from decksmith.audit.context import AuditContext
 from decksmith.audit.engine import catalogue, run_audit
-from decksmith.audit.fixers import apply_fixes
+from decksmith.audit.fixers import AUTO_SAFE, apply_fixes
 from decksmith.content.ingest import ingest
 from decksmith.core.config import ROOT, settings
 from decksmith.core.logging import setup_logging
@@ -31,7 +31,7 @@ from decksmith.generation.planner import Brief
 from decksmith.generation.skills import list_versions
 from decksmith.parsing.debug import overlay
 from decksmith.parsing.template_parser import PARSER_VERSION, analyze_template, summarize
-from decksmith.pipeline import Pipeline
+from decksmith.pipeline import Pipeline, apply_rewrites
 from decksmith.render.soffice import pdf_to_pngs, pptx_to_pdf
 from decksmith.export.exporters import to_html
 
@@ -239,6 +239,7 @@ def _variant_payload(v) -> dict:
         "audit_before_fix": v.audit_before_fix,
         "slides": v.slides, "timings": v.timings, "version": 1,
         "pptx_path": v.pptx,
+        "plan": json.loads(v.plan.model_dump_json()) if v.plan else None,
     }
 
 
@@ -344,21 +345,37 @@ async def fix_variant(run_id: str, name: str, req: FixRequest):
     t0 = time.time()
     async with LLMClient() as llm:
         res = await apply_fixes(v["pptx_path"], chosen, prof, out, llm, (r.get("plan") or {}).get("language", "ru"))
-        rdir = vdir / f"render_fix{ver}"
-        pdf = await asyncio.to_thread(pptx_to_pdf, out, rdir)
-        pngs = await asyncio.to_thread(pdf_to_pngs, pdf, rdir / "png", settings().render.dpi)
-        plan = DeckPlan.model_validate(r["plan"]) if r.get("plan") else None
+        # аудит сверяет слайды с планом этого варианта, в который внесены правки модели
+        plan = DeckPlan.model_validate(v.get("plan") or r["plan"]) if (v.get("plan") or r.get("plan")) else None
+        if plan is not None:
+            plan = apply_rewrites(plan, [(list(a), list(b)) for a, b in res.get("rewrites", [])])
         corpus = CORPORA.get(r["request"].get("content_id") or "")
-        ctx = AuditContext(pptx=out, profile=prof, plan=plan, corpus=corpus, pngs=pngs, brief_text=r["request"]["brief"],
-                           slide_kinds=[s["kind"] for s in v["slides"]], slide_sources=[s["source"] for s in v["slides"]])
-        new_audit = await run_audit(ctx, None, None, visual=False)
+
+        async def check(path: Path, tag: str):
+            """Рендер версии и детерминированный аудит по плану варианта."""
+            rdir = vdir / f"render_fix{ver}{tag}"
+            pdf_ = await asyncio.to_thread(pptx_to_pdf, path, rdir)
+            pngs_ = await asyncio.to_thread(pdf_to_pngs, pdf_, rdir / "png", settings().render.dpi)
+            ctx = AuditContext(pptx=path, profile=prof, plan=plan, corpus=corpus, pngs=pngs_, brief_text=r["request"]["brief"],
+                               slide_kinds=[s["kind"] for s in v["slides"]], slide_sources=[s["source"] for s in v["slides"]])
+            return pdf_, pngs_, await run_audit(ctx, None, None, visual=False)
+
+        pdf, pngs, new_audit = await check(out, "")
+        # новый текст модели мог не влезть в рамку: тот же безопасный раунд автоисправлений, что в пайплайне
+        safe = [i for i in new_audit.issues if i.deterministic and i.fix in AUTO_SAFE and i.severity.value != "info"]
+        if safe:
+            fixed = vdir / f"{name}_fix{ver}_auto.pptx"
+            await apply_fixes(out, safe, prof, fixed)
+            out = fixed
+            pdf, pngs, new_audit = await check(out, "_auto")
         remaining_ctx = [i for i in audit.issues if not i.deterministic and i.id not in set(res["applied"])]
         new_audit.issues += remaining_ctx
     html = await asyncio.to_thread(to_html, pdf, out, vdir / f"{name}_fix{ver}.html", r.get("plan", {}).get("title", name),
                                    prof.tokens.accent_hex)
     v.update({"pptx": _url(out), "pptx_path": str(out), "pdf": _url(pdf), "html": _url(html),
               "pngs": [_url(p) for p in pngs], "audit": json.loads(new_audit.model_dump_json()), "version": ver,
-              "last_fix": {**res, "seconds": round(time.time() - t0, 1)}})
+              "plan": json.loads(plan.model_dump_json()) if plan else v.get("plan"),
+              "last_fix": {**{k: x for k, x in res.items() if k != "rewrites"}, "seconds": round(time.time() - t0, 1)}})
     _save_state(run_id)
     return v
 

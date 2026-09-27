@@ -89,7 +89,8 @@ def measure_rich(paragraphs: list[str], styles: list[ParaStyle], box_w_emu: int,
 def fits(paragraphs: list[str], family: str, size_pt: float, box_w: int, box_h: int, bold: bool = False) -> bool:
     """Текст помещается в рамку этим кеглем (и ни одно слово не шире рамки)."""
     m = measure(paragraphs, family, size_pt, box_w, bold)
-    return m.height_emu <= box_h * 1.02 and m.longest_word_emu <= box_w - 2 * DEFAULT_INSET_LR
+    # запас 5% на расхождение метрик с рендером (например, жирного начертания нет и замер идёт по обычному)
+    return m.height_emu <= box_h * 1.02 and m.longest_word_emu <= 0.95 * (box_w - 2 * DEFAULT_INSET_LR)
 
 
 def fit_font_size(paragraphs: list[str], family: str, size_pt: float, box_w: int, box_h: int, bold: bool = False,

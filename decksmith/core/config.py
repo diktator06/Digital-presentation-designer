@@ -133,11 +133,14 @@ class Settings(BaseModel):
 
 def load_settings(path: str | Path | None = None) -> Settings:
     """Читает YAML настроек (явный путь -> $DECKSMITH_CONFIG -> config/default.yaml)."""
-    path = path or os.environ.get("DECKSMITH_CONFIG") or ROOT / "config" / "default.yaml"
-    path = Path(path)
-    data = {}
-    if path.exists():
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    path = Path(path or os.environ.get("DECKSMITH_CONFIG") or ROOT / "config" / "default.yaml")
+    # относительный путь (например, из .env) ищется и от корня проекта: сервис можно запускать из любой папки
+    if not path.is_absolute() and not path.exists() and (ROOT / path).exists():
+        path = ROOT / path
+    if not path.exists():
+        # опечатка в пути не должна молча переводить сервис в офлайн-режим
+        raise FileNotFoundError(f"Файл настроек не найден: {path}")
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     data = _interpolate(data)
     return Settings.model_validate(data)
 

@@ -322,15 +322,18 @@ DETERMINISTIC = {
 AUTO_SAFE = {"shrink_text", "grow_frame", "remove_placeholder", "trim_table", "trim_bullets", "fix_aspect", "move_inside"}
 
 
-async def fx_contextual(fc: FixContext, issues: list[AuditIssue], llm: LLMClient, language: str) -> int:
-    """Группирует исправимые моделью замечания по слайдам и вызывает скилл `fixer` один раз на слайд."""
+async def fx_contextual(fc: FixContext, issues: list[AuditIssue], llm: LLMClient, language: str
+                        ) -> list[tuple[list[str], list[str]]]:
+    """Группирует исправимые моделью замечания по слайдам и вызывает скилл `fixer` один раз на слайд.
+    Возвращает пары (абзацы до, абзацы после) изменённых рамок — по ним обновляется план для аудита.
+    """
     if not llm.enabled:
-        return 0
+        return []
     skill = load_skill("fixer")
     by_slide: dict[int, list[AuditIssue]] = {}
     for i in issues:
         by_slide.setdefault(i.slide, []).append(i)
-    changed = 0
+    changed: list[tuple[list[str], list[str]]] = []
     for si, iss in by_slide.items():
         slide = fc.slides[si]
         texts, budgets, shapes = {}, {}, {}
@@ -350,8 +353,9 @@ async def fx_contextual(fc: FixContext, issues: list[AuditIssue], llm: LLMClient
             if key in shapes and isinstance(paras, list) and paras:
                 sh = shape_by_id(slide, shapes[key])
                 if sh is not None:
-                    set_paragraphs(sh, [str(p) for p in paras])
-                    changed += 1
+                    new = [str(p) for p in paras]
+                    set_paragraphs(sh, new)
+                    changed.append((texts[key], new))
     return changed
 
 
@@ -374,15 +378,16 @@ async def apply_fixes(pptx: str | Path, issues: list[AuditIssue], profile: Templ
         except Exception as e:
             log.warning("fixer %s failed: %s", iss.fix, e)
             skipped.append(iss.id)
-    n_ctx = 0
+    rewrites: list[tuple[list[str], list[str]]] = []
     if contextual and llm is not None:
-        n_ctx = await fx_contextual(fc, contextual, llm, language)
-        applied += [i.id for i in contextual] if n_ctx else []
-        skipped += [] if n_ctx else [i.id for i in contextual]
+        rewrites = await fx_contextual(fc, contextual, llm, language)
+        applied += [i.id for i in contextual] if rewrites else []
+        skipped += [] if rewrites else [i.id for i in contextual]
     elif contextual:
         skipped += [i.id for i in contextual]
     if fc.to_drop:
         delete_slides(prs, sorted(fc.to_drop))
     out = Path(out)
     prs.save(str(out))
-    return {"output": str(out), "applied": applied, "skipped": skipped, "contextual_changed": n_ctx}
+    return {"output": str(out), "applied": applied, "skipped": skipped, "contextual_changed": len(rewrites),
+            "rewrites": rewrites}
