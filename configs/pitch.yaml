@@ -2,7 +2,7 @@
 # The outline is given (docs/pitch/pitch_plan.json), so no model is needed; the
 # project docs and the team description (docs/pitch/team.md) are the content pack,
 # so the audit checks every number on the slides against them.
-# Put «ЛЦТ2026 Шаблон презентации.pptx» into data/templates/:
+# Put «ЛЦТ2026 Шаблон презентации.pptx» into data/templates/ as lct2026.pptx:
 #   decksmith run configs/pitch.yaml
 templates:
   - data/templates/lct2026.pptx
@@ -23,4 +23,5 @@ brief:
   n_slides: 15
   language: ru
 plan: docs/pitch/pitch_plan.json
+offline: true   # the plan is given; no model calls (the audit runs its deterministic checks)
 variants: [balanced, visual, dense]

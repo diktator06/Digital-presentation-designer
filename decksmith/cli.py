@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import asyncio
 import json
 import sys
@@ -10,7 +11,7 @@ from pathlib import Path
 
 import yaml
 
-from decksmith.core.config import ROOT, override_settings
+from decksmith.core.config import ROOT, override_settings, settings
 from decksmith.core.logging import setup_logging
 
 
@@ -36,8 +37,15 @@ def cmd_run(a) -> None:
     from decksmith.pipeline import Pipeline
 
     cfg = yaml.safe_load(_p(a.config).read_text(encoding="utf-8"))
+    if cfg.get("offline"):  # no model calls at all, whatever .env says (offline planner, rules-only audit)
+        os.environ["DECKSMITH_LLM_PROVIDER"] = "offline"
+        settings.cache_clear()
     if cfg.get("settings"):
         override_settings(_p(cfg["settings"]))
+    missing = [f for f in cfg.get("templates", []) + cfg.get("content", []) if not _p(f).exists()]
+    if missing:
+        sys.exit("Нет файлов: " + ", ".join(missing) + "\nШаблоны и ТЗ из датасета кладутся в data/templates/ и "
+                 "data/content/ под именами из data/templates/README.md и data/content/README.md.")
     pipe = Pipeline()
     brief = Brief(**cfg["brief"])
     plan = DeckPlan.model_validate_json(_p(cfg["plan"]).read_text(encoding="utf-8")) if cfg.get("plan") else None

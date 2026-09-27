@@ -155,12 +155,28 @@ def fx_set_template_font(fc: FixContext, iss: AuditIssue) -> bool:
 
 
 def fx_snap_size(fc: FixContext, iss: AuditIssue) -> bool:
-    nearest = iss.data.get("nearest")
+    """Off-scale runs move to the nearest size of the template scale; a larger one only if the text
+    still fits its frame (otherwise the next smaller one). Other runs of the frame keep their size."""
+    size, nearest = iss.data.get("size"), iss.data.get("nearest")
+    if not size or not nearest:
+        return False
+    below = max((s for s in fc.profile.tokens.type_scale.sizes if s <= size), default=None)
+    ok = False
     for sid in iss.shape_ids:
         sh = shape_by_id(fc.slides[iss.slide], sid)
-        if sh is not None and nearest:
-            set_font_size(sh, float(nearest))
-    return bool(nearest)
+        e = fc.element(iss.slide, sid)
+        if sh is None:
+            continue
+        target = float(nearest)
+        if target > size and below and e is not None and e.kind == "text" and e.style and not _fits_at(e, target / size):
+            target = float(below)
+        txb = sh._element.find(qn("p:txBody"))
+        for el in (list(txb.iter(qn("a:rPr"))) + list(txb.iter(qn("a:endParaRPr")))) if txb is not None else []:
+            cur = int(el.get("sz")) / 100 if el.get("sz") else None
+            if cur is None or abs(cur - size) < 0.3:
+                el.set("sz", str(int(round(target * 100))))
+                ok = True
+    return ok
 
 
 def _nearest_palette(fc: FixContext, hex_: str) -> str:

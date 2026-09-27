@@ -30,30 +30,48 @@
   тестах, локально на Qwen3-4B и на хостинге (тексты — Qwen3.6-35B-A3B, аудит по картинке —
   Qwen3.8-27B, см. [MODELS.md](MODELS.md)).
 
+## Подготовка данных
+
+Шаблоны и ТЗ из датасета организатора в репозиторий не входят. Для демо-конфигов и тестов положите их
+в `data/` под такими именами (таблица соответствия — в [data/templates/README.md](data/templates/README.md)):
+
+```
+data/templates/vk_tech.pptx        ← «VK Tech шаблон.pptx»
+data/templates/vk_workspace.pptx   ← «VK_WorkSpace_Клиентская_конференция_Шаблон_03.pptx»
+data/templates/vk_education.pptx   ← «Шаблон презентации VK Education.pptx»
+data/content/tz_vk_tech.pdf        ← «4. VK Tech.pdf» (контент-пакет демо)
+```
+
+Без них сервис тоже работает: любой шаблон и контент загружаются в интерфейсе.
+
 ## Быстрый старт (Docker)
 
 ```bash
-cp .env.example .env          # указать OpenAI-совместимый endpoint с Qwen (см. MODELS.md)
-docker compose up --build
+cp .env.example .env          # вписать endpoint модели (см. «Подключение модели») или оставить офлайн
+docker compose up --build     # образ копирует data/, поэтому шаблоны положите до сборки
 # UI: http://localhost:8000
 ```
 
 ## Локально
 
-Требования: Python 3.11+, Node 20+, LibreOffice (`soffice` в PATH или `DECKSMITH_SOFFICE`).
+Требования: Python 3.11+ (проверено на 3.12 и 3.14), Node 20+, LibreOffice (`soffice` в PATH,
+в `/Applications` на macOS или путь в `DECKSMITH_SOFFICE`).
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
+python3 -m venv .venv && source .venv/bin/activate   # Windows: py -3 -m venv .venv; .venv\Scripts\activate
 pip install -e ".[dev]"
 (cd frontend && npm ci && npm run build)
-decksmith serve                     # UI + API на :8000
+cp .env.example .env                # модель (см. «Подключение модели»); без неё — офлайн-режим
+decksmith serve                     # UI + API на http://localhost:8000
 ```
+
+Команда `decksmith` доступна в активированном окружении; без активации — `.venv/bin/decksmith`.
 
 Воспроизводимый запуск из конфиг-файла (3 шаблона × 3 варианта на одном контенте):
 
 ```bash
 decksmith run configs/demo.yaml            # с моделью из .env
-decksmith run configs/demo_offline.yaml    # без модели (офлайн-планировщик)
+decksmith run configs/demo_offline.yaml    # без модели, даже если она задана в .env (офлайн-планировщик)
 decksmith run configs/real_model_check.yaml  # локальная открытая модель через Ollama (config/local_ollama.yaml)
 decksmith run configs/real_model_smoke.yaml  # быстрая проверка модели из .env: 1 вариант, 8 слайдов (~6 ₽ на VseGPT)
 decksmith run configs/pitch.yaml           # питч проекта на шаблоне ЛЦТ-2026 по готовому плану (без модели)
@@ -91,6 +109,27 @@ python scripts/stress.py <шаблоны...> --synthetic  # слепой стр�
 
 Остальные параметры (параллелизм, лимит времени, число слайдов, варианты) — в
 [config/default.yaml](config/default.yaml) и [config/variants.yaml](config/variants.yaml).
+
+## Подключение модели
+
+Модели меняются только в `.env` (файл в git не попадает, ключи храните только там), код не
+трогается. После правки перезапустите `decksmith serve`; в шапке интерфейса видно, какая модель
+подключена («LLM: …» или «offline»).
+
+```bash
+# хостинг VseGPT — так проверено на отборочном этапе (открытые веса ≤ 35B, Apache 2.0)
+DECKSMITH_CONFIG=config/vsegpt.yaml           # запросы без «размышлений», темп ≤ 1 запроса/с, повторы при 429
+DECKSMITH_LLM_BASE_URL=https://api.vsegpt.ru/v1
+DECKSMITH_LLM_API_KEY=<ваш ключ>
+DECKSMITH_LLM_MODEL=qwen/qwen3.6-35b-a3b      # план и тексты
+DECKSMITH_VLM_MODEL=qwen/qwen3.8-27b          # смысловой аудит по картинке слайда
+
+# свой GPU (vLLM): DECKSMITH_LLM_BASE_URL=http://localhost:8001/v1, DECKSMITH_LLM_MODEL=Qwen/Qwen3-32B
+# финал (инференс VK): DECKSMITH_LLM_BASE_URL=<endpoint VK>, DECKSMITH_LLM_MODEL и DECKSMITH_VLM_MODEL — Qwen 3.8 27B
+# без модели: DECKSMITH_LLM_PROVIDER=offline
+```
+
+Замеры моделей, лицензии и ссылки на Hugging Face — в [MODELS.md](MODELS.md).
 
 ## Как пользоваться
 

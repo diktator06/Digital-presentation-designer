@@ -1,5 +1,7 @@
-# Reproducible demo run: 3 templates x 3 variants on one content pack.
+# Reproducible demo run: 3 templates x 3 variants on one content pack, without any model:
+# offline planner and the rules-only audit, whatever .env says.
 # decksmith run configs/demo_offline.yaml
+offline: true
 templates:
   - data/templates/vk_tech.pptx
   - data/templates/vk_workspace.pptx

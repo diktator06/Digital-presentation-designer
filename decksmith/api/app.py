@@ -178,7 +178,8 @@ async def upload_content(files: list[UploadFile] = File(...)):
 @app.post("/api/content/sample")
 async def sample_content():
     """Ready-made content pack: every file shipped in data/content/ (PDF task text, sample brief...)."""
-    files = sorted(p for p in (ROOT / "data" / "content").glob("*") if p.suffix.lower() in (".pdf", ".md", ".docx", ".txt", ".pptx"))
+    files = sorted(p for p in (ROOT / "data" / "content").glob("*")
+                   if p.suffix.lower() in (".pdf", ".md", ".docx", ".txt", ".pptx") and not p.stem.upper().startswith("README"))
     if not files:
         raise HTTPException(404, "data/content is empty")
     corpus = await asyncio.to_thread(ingest, files)
