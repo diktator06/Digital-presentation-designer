@@ -13,7 +13,8 @@ LM Studio, облачный провайдер или инференс VK для
 | VLM на хостинге (визуальный аудит; модель финала) | Qwen3.8-27B | 27B dense, текст + изображения | Apache 2.0 | скиллы `visual_audit`, `pattern_labeler` | https://huggingface.co/Qwen/Qwen3.8-27B |
 | VLM на своём GPU | Qwen2.5-VL-32B-Instruct | 32B | Apache 2.0 | те же скиллы | https://huggingface.co/Qwen/Qwen2.5-VL-32B-Instruct |
 | VLM (альтернатива) | Qwen3-VL-30B-A3B-Instruct | 30B MoE | Apache 2.0 | то же | https://huggingface.co/Qwen/Qwen3-VL-30B-A3B-Instruct |
-| Text-to-image (иллюстрации в слайдах) | FLUX.1 [schnell] | 12B | Apache 2.0 | `generation/images.py`, 4 шага | https://huggingface.co/black-forest-labs/FLUX.1-schnell |
+| Text-to-image на хостинге (иллюстрации в слайдах) | FLUX.2 [klein] 4B | 4B | Apache 2.0 | `generation/images.py`, слайды `image_text` | https://huggingface.co/black-forest-labs/FLUX.2-klein-4B |
+| Text-to-image на своём GPU | FLUX.1 [schnell] | 12B | Apache 2.0 | то же, 4 шага | https://huggingface.co/black-forest-labs/FLUX.1-schnell |
 | Инференс финала | **Qwen 3.8 27B** от VK (ТЗ: «командам топ-10 предоставляется модель Qwen 3.8 27b; использование инференса VK обязательно») | 27B dense, мультимодальная | Apache 2.0 | все LLM-скиллы и визуальный аудит — смена `DECKSMITH_LLM_BASE_URL`/`MODEL`/`VLM_MODEL` | https://huggingface.co/Qwen/Qwen3.8-27B |
 
 Не-генеративные компоненты (детерминированные, CPU): LibreOffice (рендер PPTX→PDF, MPL-2.0),
@@ -30,8 +31,10 @@ Pillow/FreeType (замер текста), Lucide icons (ISC).
   меньше латентность и меньше риск сломанного вывода; 12 коротких вызовов идут параллельно.
 * **VLM только в аудите**: смысловые вопросы Приложения 1 требуют картинку слайда; всё, что
   измеримо по файлу, проверяется детерминированно без модели.
-* **FLUX.1-schnell**: 4 шага диффузии → секунды на изображение; изображения генерируются
-  один раз на запуск и переиспользуются тремя вариантами.
+* **FLUX.2 [klein] 4B / FLUX.1-schnell**: дистиллированные модели на несколько шагов диффузии →
+  секунды на изображение; изображения генерируются один раз на запуск и переиспользуются тремя
+  вариантами. На хостинге VseGPT FLUX.1-schnell недоступна на базовом тарифе, поэтому там работает
+  FLUX.2 [klein] 4B (та же лицензия Apache 2.0, ≈3,9 ₽ за картинку 1024×768).
 
 ## Системные требования (оценка)
 
@@ -41,6 +44,7 @@ Pillow/FreeType (замер текста), Lucide icons (ISC).
 | Qwen3-30B-A3B | ≈ 61 ГБ | ≈ 17 ГБ; высокая скорость декодирования |
 | Qwen2.5-VL-32B | ≈ 66 ГБ | ≈ 21 ГБ |
 | FLUX.1-schnell | ≈ 24 ГБ (≈ 12 ГБ с CPU-offload) | — |
+| FLUX.2 [klein] 4B | ≈ 13 ГБ (потребительская GPU) | — |
 | Сервис без моделей | 2 CPU, 4 ГБ RAM, LibreOffice | — |
 
 Бюджет времени (после Enter, 3 колоды параллельно): план ≈ 1 + 12 параллельных вызовов LLM,
@@ -74,6 +78,10 @@ DECKSMITH_LLM_BASE_URL=https://api.vsegpt.ru/v1
 DECKSMITH_LLM_API_KEY=...
 DECKSMITH_LLM_MODEL=qwen/qwen3.6-35b-a3b     # план и тексты
 DECKSMITH_VLM_MODEL=qwen/qwen3.8-27b         # смысловой аудит по картинке слайда
+DECKSMITH_IMAGE_PROVIDER=openai_images       # иллюстрации в слайдах
+DECKSMITH_IMAGE_BASE_URL=https://api.vsegpt.ru/v1
+DECKSMITH_IMAGE_API_KEY=...                  # тот же ключ
+DECKSMITH_IMAGE_MODEL=img-flux/flux-2-klein-4b
 ```
 
 Что выяснилось на живом сервисе и учтено в `config/vsegpt.yaml` и клиенте:

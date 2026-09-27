@@ -2,7 +2,7 @@
 # Чтобы выкатить новый промпт: добавьте skills/<имя>/v2.yaml и переключите `active`;
 # манифест запуска записывает имя@версия + sha256 каждого использованного файла.
 skills:
-  outline:          {active: v1}
+  outline:          {active: v2}
   slide_writer:     {active: v2}
   headline:         {active: v1}
   shortener:        {active: v1}
@@ -12,4 +12,4 @@ skills:
   image_style:      {active: v1}
   json_repair:      {active: v1}
 agents:
-  deck_agent:       {active: v3}
+  deck_agent:       {active: v4}

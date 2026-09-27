@@ -55,11 +55,13 @@ def test_skills_registry_and_rendering():
         assert sk.sha256 and sk.user
     agent = load_agent()
     assert agent.step("outline")["skill"].startswith("outline@")
-    _, user = load_skill("outline").render(
-        brief="b", purpose="product", purpose_hint="", audience="", n_slides=12, capabilities="- cards",
-        context="ctx", language="ru", title_chars=60,
-    )
-    assert "12" in user and "ctx" in user
+    ctx = dict(brief="b", purpose="product", purpose_hint="", audience="", n_slides=12, capabilities="- cards",
+               context="ctx", language="ru", title_chars=60)
+    _, user = load_skill("outline").render(**ctx, with_images=False)
+    assert "12" in user and "ctx" in user and "intent=image_text в" not in user
+    # при включённой генерации изображений структура просит слайд-иллюстрацию
+    _, user = load_skill("outline").render(**ctx, with_images=True)
+    assert "intent=image_text в" in user
 
 
 def test_font_download_is_time_bounded(monkeypatch):

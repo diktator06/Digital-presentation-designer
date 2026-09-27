@@ -133,8 +133,8 @@ def apply_variant(plan: DeckPlan, v: Variant) -> DeckPlan:
             summary_first = True
     if v.drop_sections and not summary_first:
         # в этом варианте нет разделителей, но заданное пользователем число слайдов сохраняется (ТЗ):
-        # разделитель
-        # подводит итог своего раздела (если выводы уже стоят в начале, он остаётся обычным разделителем)
+        # разделитель подводит итог своего раздела (если выводы уже стоят в начале, он остаётся обычным
+        # разделителем)
         slides = [_section_digest(s, slides[i + 1:]) if s.intent == PatternKind.section else s for i, s in enumerate(slides)]
     if v.prefer_icons:
         for s in slides:  # короткие списки становятся карточками с иконками
@@ -145,6 +145,28 @@ def apply_variant(plan: DeckPlan, v: Variant) -> DeckPlan:
         s.bullets = s.bullets[: v.max_bullets]
     p.slides = slides
     return p
+
+
+def apply_rewrites(plan: DeckPlan, rewrites: list[tuple[list[str], list[str]]]) -> DeckPlan:
+    """План с текстами после сокращения: аудит сверяет содержание слайда с тем, что на нём стоит."""
+    if not rewrites:
+        return plan
+    table: dict[str, str] = {}
+    for old, new in rewrites:
+        # абзацы сопоставляются по порядку; если модель изменила их число, старый абзац получает весь новый текст
+        for i, o in enumerate(old):
+            table[o.strip()] = new[i] if len(old) == len(new) else " ".join(new)
+
+    def sub(t: str) -> str:
+        return table.get(t.strip(), t) if t else t
+
+    out = plan.model_copy(deep=True)
+    for spec in out.slides:
+        spec.title, spec.subtitle, spec.message, spec.quote = sub(spec.title), sub(spec.subtitle), sub(spec.message), sub(spec.quote)
+        spec.bullets = [sub(b) for b in spec.bullets]
+        for it in spec.items:
+            it.title, it.text = sub(it.title), sub(it.text)
+    return out
 
 
 def plan_variants(plan: DeckPlan, profile: TemplateProfile, names: list[str],
@@ -255,7 +277,8 @@ class Pipeline:
 
             if report.overflows and llm.enabled and self.agent.enabled("shorten"):
                 ts = time.time()
-                await self._shorten(pptx, report.overflows, llm)
+                # аудит сверяет содержание с тем, что стоит на слайде после сокращения
+                vplan = apply_rewrites(vplan, await self._shorten(pptx, report.overflows, llm))
                 vr.timings["shorten"] = round(time.time() - ts, 2)
 
             ts = time.time()
@@ -323,8 +346,10 @@ class Pipeline:
             log.error("render failed: %s", e)
             return [], None, False
 
-    async def _shorten(self, pptx: Path, overflows, llm: LLMClient) -> None:
-        """Сокращает текст, который не поместился в рамку, через скилл `shortener`."""
+    async def _shorten(self, pptx: Path, overflows, llm: LLMClient) -> list[tuple[list[str], list[str]]]:
+        """Сокращает текст, который не поместился в рамку, через скилл `shortener`; возвращает пары
+        (абзацы до, абзацы после) для сверки содержания в аудите.
+        """
         from pptx import Presentation
 
         skill = load_skill("shortener")
@@ -333,7 +358,9 @@ class Pipeline:
             res = await llm.run_skill(skill, None, items=items)
         except Exception as e:
             log.warning("shortener failed: %s", e)
-            return
+            return []
+        before = {f"{o.slide}:{o.shape_id}": o.paragraphs for o in overflows[:40]}
+        rewrites = []
         prs = Presentation(str(pptx))
         slides = list(prs.slides)
         for it in (res or {}).get("items", []):
@@ -341,10 +368,13 @@ class Pipeline:
                 si, sid = map(int, str(it["id"]).split(":"))
                 sh = shape_by_id(slides[si], sid)
                 if sh is not None and it.get("paragraphs"):
-                    set_paragraphs(sh, [str(p) for p in it["paragraphs"]])
+                    new = [str(p) for p in it["paragraphs"]]
+                    set_paragraphs(sh, new)
+                    rewrites.append((before.get(str(it["id"]), []), new))
             except Exception:
                 continue
         prs.save(str(pptx))
+        return rewrites
 
     def _manifest(self, run_id, rdir: Path, profile, corpus, brief, plan, mode, results, timings) -> Path:
         """Пишет манифест запуска: время этапов, версии скиллов, телеметрия модели, обоснования вёрстки."""

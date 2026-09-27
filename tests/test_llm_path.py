@@ -31,7 +31,7 @@ def test_plan_via_llm_with_repair(profiles):
     (plan, mode), llm = asyncio.run(go())
     assert mode == "llm"
     skills = [r["skill"] for r in emu.requests]
-    assert "outline@v1" in skills and "outline@v1:repair" in skills  # неверная схема -> один раунд исправления
+    assert "outline@v2" in skills and "outline@v2:repair" in skills  # неверная схема -> один раунд исправления
     # авторы текстов параллельно, по одному на содержательный слайд
     assert sum(s == "slide_writer@v2" for s in skills) >= 6
     assert all(r["body"].get("response_format") == {"type": "json_object"} for r in emu.requests)

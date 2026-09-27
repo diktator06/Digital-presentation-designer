@@ -5,6 +5,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 os.environ.setdefault("DECKSMITH_LLM_PROVIDER", "offline")  # тесты никогда не вызывают модель
+os.environ.setdefault("DECKSMITH_IMAGE_PROVIDER", "none")  # и не генерируют изображения
 # свой кэш: тестовые шаблоны не должны появиться в списке шаблонов сервиса
 os.environ.setdefault("DECKSMITH_WORKSPACE", str(ROOT / "workspace" / "_test"))
 TEMPLATES = sorted((ROOT / "data" / "templates").glob("*.pptx"))

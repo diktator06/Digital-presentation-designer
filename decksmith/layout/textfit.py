@@ -97,7 +97,8 @@ def fit_font_size(paragraphs: list[str], family: str, size_pt: float, box_w: int
     """Наибольший кегль ≤ size_pt, который помещается; ограничен шкалой шаблона, если она задана."""
     candidates = sorted({s for s in (allowed or []) if min_ratio * size_pt <= s <= size_pt}, reverse=True)
     if not candidates:
-        candidates = [round(size_pt * r, 1) for r in (1.0, 0.94, 0.88, 0.82, 0.76) if r >= min_ratio]
+        candidates = [round(size_pt * r, 1) for r in (1.0, 0.94, 0.88, 0.82, 0.76, 0.7, 0.62, 0.55, 0.48, 0.4)
+                      if r >= min_ratio]
     if size_pt not in candidates:
         candidates.insert(0, size_pt)
     for s in candidates:

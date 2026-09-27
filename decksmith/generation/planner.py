@@ -16,6 +16,7 @@ import re
 from pydantic import BaseModel, Field
 
 from decksmith.content.ingest import NUM_RE, normalize_number, select_context
+from decksmith.core.config import settings
 from decksmith.core.models import (
     ChartSeries,
     ChartSpec,
@@ -381,10 +382,13 @@ async def plan_with_llm(brief: Brief, corpus: ContentCorpus, profile: TemplatePr
         return "; ".join(problems) + f". В ответе должно быть ровно {brief.n_slides} слайдов."
 
 
+    img = settings().image
     o = await llm.run_skill(
         outline_skill, Outline, validate=check_outline, brief=brief.text, purpose=brief.purpose,
         purpose_hint=hints.get(brief.purpose, ""), audience=brief.audience, n_slides=brief.n_slides, capabilities=caps,
         context=context, language=brief.language, title_chars=title_chars,
+        # слайд-иллюстрацию просим, только если изображения действительно будут сгенерированы
+        with_images=img.provider not in ("none", "") and bool(img.base_url),
     )
     o = _normalize_outline(o, brief)
     limit_sections(o, cap)

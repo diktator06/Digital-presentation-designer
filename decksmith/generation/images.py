@@ -19,6 +19,7 @@ from decksmith.core.models import DeckPlan, PatternKind
 
 log = logging.getLogger(__name__)
 
+
 def styled_prompt(prompt: str, palette_desc: str) -> str:
     """Оборачивает промпт содержания версионируемым стилем изображений (skills/image_style/<версия>.yaml)."""
     from decksmith.generation.skills import load_skill
@@ -38,11 +39,14 @@ async def _generate(client: httpx.AsyncClient, cfg: ImageConfig, prompt: str, ou
         r.raise_for_status()
         d = r.json()["data"][0]
         if d.get("b64_json"):
-            out.write_bytes(base64.b64decode(d["b64_json"]))
+            data = base64.b64decode(d["b64_json"])
         elif d.get("url"):
-            out.write_bytes((await client.get(d["url"])).content)
+            data = (await client.get(d["url"])).content
         else:
             return None
+        # провайдеры отдают и PNG, и JPEG: расширение файла — по сигнатуре содержимого
+        out = out.with_suffix(".jpg" if data[:3] == b"\xff\xd8\xff" else ".png")
+        out.write_bytes(data)
         return out
     except Exception as e:
         log.warning("image generation failed: %s", e)

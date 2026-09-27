@@ -202,8 +202,7 @@ def build_tokens(
     h_pt = slide_h / 12700
     clamp = lambda v, lo, hi: max(lo, min(hi, v))  # noqa: E731
     # Данные слайдов-примеров важнее; при малом числе примеров значения плейсхолдеров по умолчанию (часто 32
-    # пт
-    # текст, 44 пт заголовок) приводятся к диапазону, пропорциональному высоте слайда.
+    # пт текст, 44 пт заголовок) приводятся к диапазону, пропорциональному высоте слайда.
     title = clamp(float(mode(title_sizes, sizes[0] if sizes else h_pt * 0.07)), h_pt * 0.04, h_pt * 0.1)
     body_default = h_pt * 0.032
     body = float(mode(body_sizes, body_default)) if len(body_sizes) >= 3 else min(float(mode(body_sizes, body_default)), body_default)

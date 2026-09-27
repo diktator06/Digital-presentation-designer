@@ -39,9 +39,11 @@ def cmd_run(a) -> None:
     from decksmith.pipeline import Pipeline
 
     cfg = yaml.safe_load(_p(a.config).read_text(encoding="utf-8"))
-    # никаких вызовов модели, что бы ни было в .env (офлайн-планировщик, аудит только по правилам)
+    # никаких вызовов модели, что бы ни было в .env (офлайн-планировщик, аудит только по правилам,
+    # без генерации изображений)
     if cfg.get("offline"):
         os.environ["DECKSMITH_LLM_PROVIDER"] = "offline"
+        os.environ["DECKSMITH_IMAGE_PROVIDER"] = "none"
         settings.cache_clear()
     if cfg.get("settings"):
         override_settings(_p(cfg["settings"]))

@@ -147,6 +147,10 @@ def score_pattern(p: Pattern, spec: SlideSpec, variant: Variant, used: dict[str,
             return None
     elif need > 0 and spec.intent in ITEM_KINDS:
         s -= 0.8  # элементы превратились бы в сплошной текст
+    # пункты встают только в рамки основного текста или в элементы повторителя: без них они бы потерялись
+    if spec.bullets and not p.repeaters and not any(
+            sl.kind == "text" and sl.item_index is None and sl.role == SlotRole.body for sl in p.slots):
+        return None
     # структура элементов: заголовкам+текстам нужны либо два слота, либо составная рамка
     if p.repeaters and spec.items:
         roles = set(p.repeaters[0].slot_roles)
@@ -178,8 +182,8 @@ def score_pattern(p: Pattern, spec: SlideSpec, variant: Variant, used: dict[str,
             s -= 1.5 * share
             why.append(f"item slots left empty {share:.0%}")
         # карточки с заголовком и телом (две рамки или одна рамка с двумя стилями) для элементов, которые
-        # несут
-        # одну строку (заголовок или текст, который тогда уходит в заголовок): каждое тело остаётся пустым
+        # несут одну строку (заголовок или текст, который тогда уходит в заголовок): каждое тело остаётся
+        # пустым
         if (comp or SlotRole.item_title in roles and SlotRole.item_text in roles) and not (has_titles and has_texts):
             s -= 2.0
             why.append("card bodies left empty")
@@ -308,7 +312,9 @@ def compose_candidates(spec: SlideSpec, variant: Variant, has_image: bool = Fals
         n = len(spec.items)
         if spec.intent == K.steps or spec.intent == K.agenda:
             out.append(Candidate(2.4 + pref_bonus(item_pref, "steps"), "compose:process", None, None, [f"{n}-step process diagram"]))
-        if spec.intent == K.stats or all(i.value for i in spec.items):
+        valued = sum(bool(i.value) for i in spec.items)
+        # плитки KPI — это числа; без значений заголовок встал бы вместо числа крупным кеглем
+        if valued * 2 >= n and (spec.intent == K.stats or valued == n):
             bonus = 1.2 if spec.intent == K.stats and n <= 4 else 0.0
             out.append(Candidate(2.3 + bonus + pref_bonus(data_pref, "kpi"), "compose:kpi", None, None, ["value tiles"]))
         out.append(Candidate(2.0 + pref_bonus(item_pref, "cards"), "compose:cards", None, None, [f"{n} icon cards"]))

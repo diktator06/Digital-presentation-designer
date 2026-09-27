@@ -28,7 +28,7 @@
   `.pdf`, самодостаточный `.html`.
 * **Модели**: открытые веса Apache 2.0 через OpenAI-совместимый API; путь проверен на эмуляторе в
   тестах, локально на Qwen3-4B и на хостинге (тексты — Qwen3.6-35B-A3B, аудит по картинке —
-  Qwen3.8-27B, см. [MODELS.md](MODELS.md)).
+  Qwen3.8-27B, иллюстрации в слайдах — FLUX.2 [klein] 4B, см. [MODELS.md](MODELS.md)).
 
 ## Подготовка данных
 
@@ -101,7 +101,7 @@ python scripts/stress.py <шаблоны...> --synthetic  # слепой стр�
 | `DECKSMITH_LLM_MODEL` | модель для текстовых скиллов | `Qwen/Qwen3-32B` (свой GPU), `qwen/qwen3.6-35b-a3b` в профиле `config/vsegpt.yaml` |
 | `DECKSMITH_VLM_MODEL` | мультимодальная модель для визуального аудита | — (визуальный аудит выключен) |
 | `DECKSMITH_IMAGE_PROVIDER` | `none` / `openai_images` | `none` |
-| `DECKSMITH_IMAGE_BASE_URL`, `DECKSMITH_IMAGE_API_KEY`, `DECKSMITH_IMAGE_MODEL` | text-to-image | FLUX.1-schnell |
+| `DECKSMITH_IMAGE_BASE_URL`, `DECKSMITH_IMAGE_API_KEY`, `DECKSMITH_IMAGE_MODEL` | text-to-image | FLUX.1-schnell (свой GPU), `img-flux/flux-2-klein-4b` в профиле `config/vsegpt.yaml` |
 | `DECKSMITH_SOFFICE` | путь к LibreOffice | автопоиск |
 | `DECKSMITH_WORKSPACE` | каталог кэша профилей, запусков и загрузок (тесты и стресс-тест используют свои) | `workspace` |
 | `DECKSMITH_FONT_DOWNLOAD` | `0` — не докачивать открытые шрифты из Google Fonts | `1` |
@@ -123,6 +123,9 @@ DECKSMITH_LLM_BASE_URL=https://api.vsegpt.ru/v1
 DECKSMITH_LLM_API_KEY=<ваш ключ>
 DECKSMITH_LLM_MODEL=qwen/qwen3.6-35b-a3b      # план и тексты
 DECKSMITH_VLM_MODEL=qwen/qwen3.8-27b          # смысловой аудит по картинке слайда
+DECKSMITH_IMAGE_PROVIDER=openai_images        # иллюстрации в слайдах (FLUX.2 [klein] 4B, Apache 2.0)
+DECKSMITH_IMAGE_BASE_URL=https://api.vsegpt.ru/v1
+DECKSMITH_IMAGE_API_KEY=<ваш ключ>
 
 # свой GPU (vLLM): DECKSMITH_LLM_BASE_URL=http://localhost:8001/v1, DECKSMITH_LLM_MODEL=Qwen/Qwen3-32B
 # финал (инференс VK): DECKSMITH_LLM_BASE_URL=<endpoint VK>, DECKSMITH_LLM_MODEL и DECKSMITH_VLM_MODEL — Qwen 3.8 27B

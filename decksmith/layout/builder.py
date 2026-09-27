@@ -61,7 +61,7 @@ from decksmith.layout.room import (clear_title_box, draws, grow_frame, is_plate,
 from decksmith.parsing.ooxml import flatten_shapes
 from decksmith.layout.textfit import DEFAULT_INSET_TB, fit_composite, fit_font_size, max_chars_for, measure, snap_down
 from decksmith.parsing.ooxml import contrast_ratio, rel_luminance
-from decksmith.parsing.template_parser import region_color, region_colors
+from decksmith.parsing.template_parser import region_color, region_colors, title_clear_box
 
 log = logging.getLogger(__name__)
 EMU_PT = 12700
@@ -123,6 +123,7 @@ class DeckBuilder:
         self._bold_first: set[str] = set()
         self._inline_values = False
         self._bg_cache: dict[tuple, str | None] = {}
+        self._clear_cache: dict[tuple, Box | None] = {}
         self._clear_prompt_texts()
 
     def _clear_prompt_texts(self) -> None:
@@ -243,6 +244,23 @@ class DeckBuilder:
         if layout_index is None or not 0 <= layout_index < len(layouts):
             return None
         return clear_title_box(box, layouts[layout_index].title_clear)
+
+    def _clear_text_box(self, layout_index: int | None, box: Box) -> Box | None:
+        """Текстовая рамка, укороченная до графики, которую макет рисует на её уровне (орнамент, фото в фоне):
+        подзаголовок или текст длиннее, чем в примере, не должен уходить под неё. None — рамка свободна.
+        """
+        layouts, t = self.profile.layouts, self.profile.tokens
+        if layout_index is None or not 0 <= layout_index < len(layouts):
+            return None
+        li = layouts[layout_index]
+        if not li.thumbnail or not Path(li.thumbnail).exists():
+            return None
+        key = (layout_index, box.x, box.y, box.w, box.h)
+        if key not in self._clear_cache:
+            # тот же разбор рендера пустого макета, что и для полосы заголовка
+            self._clear_cache[key] = title_clear_box(Path(li.thumbnail), box, t.slide_w, t.slide_h,
+                                                     li.background_hex or t.background_hex)
+        return self._clear_cache[key]
 
     def _shape(self, slide, pat: Pattern, slot: Slot):
         if pat.source == "layout":
@@ -565,8 +583,11 @@ class DeckBuilder:
         # текст подгоняется последним: рамка может вырасти в место, освобождённое неиспользованными слотами
         for slot, sh, paras, tidx in placed:
             fit_slot = slot
-            if slot.role == SlotRole.title and slot.item_index is None:
-                clear = self._clear_title_box(pat.layout_index, slot.box)
+            if slot.item_index is None and slot.role in (SlotRole.title, SlotRole.subtitle, SlotRole.body):
+                if slot.role == SlotRole.title:
+                    clear = self._clear_title_box(pat.layout_index, slot.box)
+                else:
+                    clear = self._clear_text_box(pat.layout_index, slot.box)
                 if clear is not None:
                     # фиксируем все четыре: плейсхолдеры могут наследовать
                     x, y, h = sh.left, sh.top, sh.height
