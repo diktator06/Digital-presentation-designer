@@ -89,7 +89,8 @@ class PipelineConfig(BaseModel):
     min_slides: int = 10
     max_slides: int = 15
     variants: list[str] = Field(default_factory=lambda: ["balanced", "visual", "dense"])
-    deadline_s: float = 285.0
+    deadline_s: float = 285.0  # лимит генерации после Enter (ТЗ: не более 5 минут) с запасом
+    finish_reserve_s: float = 25.0  # время на автоисправления, повторный рендер и экспорт после аудита
     visual_audit: bool = True
     auto_fix: bool = True
 

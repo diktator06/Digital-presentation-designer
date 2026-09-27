@@ -47,10 +47,14 @@ def _facts_for(ctx: AuditContext, i: int) -> str:
             f"ключевая мысль по плану: {notes or '—'}")
 
 
-async def visual_audit(ctx: AuditContext, llm: LLMClient, agent: Agent) -> list[AuditIssue]:
+async def visual_audit(ctx: AuditContext, llm: LLMClient, agent: Agent, deadline: float | None = None) -> list[AuditIssue]:
+    """Смысловые вопросы Приложения 1 по картинке каждого слайда. `deadline` (время по часам) — предел
+    лимита генерации: после него новые вопросы к модели не задаются, непроверенные слайды перечисляются.
+    """
     # контекстным проверкам нужна мультимодальная модель: картинки слайдов никогда не отправляются текстовой
     if not llm.enabled or not ctx.pngs or not llm.cfg.vlm_model:
         return []
+    skipped: list[int] = []
     skill = skill_for_step(agent, "audit_visual", "visual_audit")
     n = len(ctx.slides)
     titles = [ctx.plan.slides[i].title if ctx.plan and i < len(ctx.plan.slides) else "" for i in range(n)]
@@ -61,10 +65,18 @@ async def visual_audit(ctx: AuditContext, llm: LLMClient, agent: Agent) -> list[
         intent = spec.intent.value if spec else ""
         if spec is not None and "[summary]" in (spec.notes or ""):
             intent = "agenda"  # список выводов и есть суть итогового слайда
+        call = llm.run_skill(skill, None, images=[ctx.pngs[i]], index=i + 1, total=n, title=titles[i],
+                             prev_title=titles[i - 1] if i else "", next_title=titles[i + 1] if i + 1 < n else "",
+                             facts=_facts_for(ctx, i))
         try:
-            res = await llm.run_skill(skill, None, images=[ctx.pngs[i]], index=i + 1, total=n, title=titles[i],
-                                      prev_title=titles[i - 1] if i else "", next_title=titles[i + 1] if i + 1 < n else "",
-                                      facts=_facts_for(ctx, i))
+            if deadline is None:
+                res = await call
+            else:
+                # перегруженный хостинг (повторы после 429) не должен выводить колоду за лимит времени
+                res = await asyncio.wait_for(call, timeout=max(deadline - time.time(), 0.001))
+        except asyncio.TimeoutError:
+            skipped.append(i)
+            return []
         except Exception as e:
             log.warning("visual audit failed on slide %d: %s", i + 1, e)
             return []
@@ -87,7 +99,15 @@ async def visual_audit(ctx: AuditContext, llm: LLMClient, agent: Agent) -> list[
         return out
 
     results = await asyncio.gather(*[one(i) for i in range(n)])
-    return [x for r in results for x in r]
+    out = [x for r in results for x in r]
+    if skipped:
+        nums = ", ".join(str(i + 1) for i in sorted(skipped))
+        out.append(AuditIssue(
+            id="audit.visual_partial", check="audit.visual_partial", category="content", deterministic=False,
+            severity=Severity.info, slide=min(skipped),
+            message=f"Смысловой аудит по картинке не успел до лимита времени на слайдах: {nums} (проверки по правилам выполнены)",
+        ))
+    return out
 
 
 def score(issues: list[AuditIssue], n_slides: int) -> float:
@@ -96,12 +116,13 @@ def score(issues: list[AuditIssue], n_slides: int) -> float:
     return round(max(0.0, 100.0 - penalty * 10 / max(n_slides, 1)), 1)
 
 
-async def run_audit(ctx: AuditContext, llm: LLMClient | None = None, agent: Agent | None = None, visual: bool = True) -> AuditReport:
+async def run_audit(ctx: AuditContext, llm: LLMClient | None = None, agent: Agent | None = None, visual: bool = True,
+                    deadline: float | None = None) -> AuditReport:
     """Полный аудит: детерминированные правила + (при наличии VLM) смысловые вопросы по картинке слайда."""
     t0 = time.time()
     issues, ran = run_rules(ctx)
     if visual and llm is not None and agent is not None:
-        issues += await visual_audit(ctx, llm, agent)
+        issues += await visual_audit(ctx, llm, agent, deadline)
         if llm.enabled and ctx.pngs and llm.cfg.vlm_model:
             ran += [v[0] for v in VLM_QUESTIONS.values()]
     issues.sort(key=lambda i: (i.slide, list(WEIGHTS).index(i.severity), i.check))

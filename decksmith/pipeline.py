@@ -290,7 +290,9 @@ class Pipeline:
             ctx = AuditContext(pptx=pptx, profile=profile, plan=vplan, corpus=corpus, pngs=pngs, brief_text=brief.text,
                                slide_kinds=[s["kind"] for s in report.slides], slide_sources=[s["source"] for s in report.slides],
                                render_ok=render_ok)
-            audit = await run_audit(ctx, llm, self.agent, visual=self.cfg.pipeline.visual_audit and self.agent.enabled("audit_visual"))
+            # после аудита остаются автоисправления, повторный рендер и экспорт: им оставляется запас
+            audit = await run_audit(ctx, llm, self.agent, visual=self.cfg.pipeline.visual_audit and self.agent.enabled("audit_visual"),
+                                    deadline=t0 + self.cfg.pipeline.deadline_s - self.cfg.pipeline.finish_reserve_s)
             vr.timings["audit"] = round(time.time() - ts, 2)
             await _emit(emit, stage="audit", variant=v.name, status="done", score=audit.score, issues=len(audit.issues),
                         t=round(time.time() - t0, 2))
