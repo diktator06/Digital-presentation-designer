@@ -34,5 +34,5 @@ def test_end_to_end_three_variants_under_five_minutes(tmp_path):
             assert f and Path(f).exists() and Path(f).stat().st_size > 1000
         assert v.audit is not None and v.audit.score > 60
     m = json.loads(Path(res.manifest).read_text(encoding="utf-8"))
-    assert m["skills"]["outline"]["skill"] == "outline@v2" and m["skills"]["outline"]["sha256"]
+    assert m["skills"]["outline"]["skill"] == "outline@v3" and m["skills"]["outline"]["sha256"]
     assert all(s["rationale"] for v in m["variants"] for s in v["slides"])

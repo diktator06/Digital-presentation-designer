@@ -31,15 +31,51 @@ def test_plan_via_llm_with_repair(profiles):
     (plan, mode), llm = asyncio.run(go())
     assert mode == "llm"
     skills = [r["skill"] for r in emu.requests]
-    assert "outline@v2" in skills and "outline@v2:repair" in skills  # неверная схема -> один раунд исправления
+    assert "outline@v3" in skills and "outline@v3:repair" in skills  # неверная схема -> один раунд исправления
     # авторы текстов параллельно, по одному на содержательный слайд
-    assert sum(s == "slide_writer@v2" for s in skills) >= 6
+    assert sum(s == "slide_writer@v3" for s in skills) >= 6
     assert all(r["body"].get("response_format") == {"type": "json_object"} for r in emu.requests)
     intents = [s.intent.value for s in plan.slides]
     assert intents[0] == "title" and intents[-1] == "thanks"
     chart = next(s for s in plan.slides if s.intent.value == "chart")
     assert chart.chart and chart.chart.series[0].values == [40, 10, 20, 30]
     assert llm.telemetry.summary()["calls"] == len(emu.requests)
+
+
+def test_materials_off_the_brief_topic_are_not_used(profiles):
+    """Бриф о лишнем весе, а материалы — о генераторе презентаций: модель помечает материалы как не по теме,
+    авторы текстов их не получают, но видят бриф; план помнит оценку (её показывает интерфейс).
+    """
+    from decksmith.content.ingest import ingest
+    from decksmith.generation.llm import LLMClient
+    from decksmith.generation.planner import Brief, make_plan
+    from decksmith.generation.skills import load_agent
+
+    emu = Emulator(materials_fit="none")
+    corpus = ingest([], "Сервис генерации презентаций: колода за 5 минут, экспорт в PPTX и аудит.")
+    brief = Brief(text="о проблеме лишнего веса", n_slides=9)
+
+    async def go():
+        """План через эмулятор модели."""
+        async with LLMClient(CFG, transport=emu.transport()) as llm:
+            return await make_plan(brief, corpus, profiles["vk_tech"], llm, load_agent())
+
+    plan, mode = asyncio.run(go())
+    assert mode == "llm" and plan.materials_fit == "none"
+    writers = [r["body"]["messages"][-1]["content"] for r in emu.requests if r["skill"].startswith("slide_writer")]
+    assert writers
+    assert all("о проблеме лишнего веса" in w for w in writers)
+    assert not any("колода за 5 минут" in w for w in writers)
+    # план видит материалы (чтобы их оценить), аудит спрашивает о теме брифа
+    outline = next(r["body"]["messages"][-1]["content"] for r in emu.requests if r["skill"] == "outline@v3")
+    assert "колода за 5 минут" in outline and "о проблеме лишнего веса" in outline
+
+    # страховка от ошибки модели: слова брифа есть в материалах — материалы по теме хотя бы частично
+    from decksmith.generation.planner import Outline, materials_fit
+    none = Outline(title="t", materials_fit="none", slides=[])
+    assert materials_fit(none, corpus, "Сервис генерации презентаций") == "partial"
+    assert materials_fit(none, corpus, "о проблеме лишнего веса") == "none"
+    assert materials_fit(none, ingest([], ""), "о проблеме лишнего веса") == "full"  # без материалов сравнивать не с чем
 
 
 def test_pipeline_with_model_path(profiles, monkeypatch, tmp_path):
@@ -59,6 +95,8 @@ def test_pipeline_with_model_path(profiles, monkeypatch, tmp_path):
     assert vlm and vlm[0]["model"] == CFG.vlm_model
     content = vlm[0]["body"]["messages"][-1]["content"]
     assert any(p.get("type") == "image_url" and p["image_url"]["url"].startswith("data:image/png;base64,") for p in content)
+    assert any("q12" in p.get("text", "") and "Тема презентации (бриф пользователя): «Сервис»" in p.get("text", "")
+               for p in content)  # вопрос о теме брифа
     ctx_issues = [i for i in v.audit.issues if not i.deterministic]
     assert any(i.check == "content.title_is_conclusion" and i.slide == 2 for i in ctx_issues)
     assert res.plan_mode == "llm"

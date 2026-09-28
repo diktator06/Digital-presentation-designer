@@ -50,11 +50,14 @@ def _writer_answer(intent: str, n: int) -> dict:
 
 
 class Emulator:
-    def __init__(self, fail_visual_on: set[int] | None = None):
-        """Эмулятор: журнал запросов и номера слайдов, на которых визуальный аудит находит проблему."""
+    def __init__(self, fail_visual_on: set[int] | None = None, materials_fit: str = "full"):
+        """Эмулятор: журнал запросов, номера слайдов, на которых визуальный аудит находит проблему, и оценка
+        модели, относятся ли материалы к теме брифа.
+        """
         self.requests: list[dict] = []
         self.outline_calls = 0
         self.fail_visual_on = fail_visual_on or {2}
+        self.materials_fit = materials_fit
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
@@ -65,7 +68,7 @@ class Emulator:
         text = user if isinstance(user, str) else " ".join(p.get("text", "") for p in user if p.get("type") == "text")
         if skill.startswith("outline"):
             if skill.endswith(":repair"):
-                content = json.dumps(OUTLINE, ensure_ascii=False)
+                content = json.dumps({**OUTLINE, "materials_fit": self.materials_fit}, ensure_ascii=False)
             else:
                 self.outline_calls += 1
                 # слайд без "title": ошибка схемы

@@ -77,7 +77,7 @@ export type Variant = {
   version: number
   last_fix?: { applied: string[]; skipped: string[]; seconds: number }
 }
-export type RunEvent = { stage: string; status?: string; variant?: string; t?: number; score?: number; issues?: number; mode?: string; slides?: number; titles?: string[]; message?: string; ts: number }
+export type RunEvent = { stage: string; status?: string; variant?: string; t?: number; score?: number; issues?: number; mode?: string; slides?: number; titles?: string[]; materials?: string; message?: string; ts: number }
 export type Run = {
   id: string
   status: 'running' | 'done' | 'error'

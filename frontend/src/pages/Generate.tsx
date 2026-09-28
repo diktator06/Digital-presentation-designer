@@ -60,10 +60,8 @@ export default function Generate() {
       })
     load()
     const iv = setInterval(() => templates.length === 0 && load(), 4000)
-    api.content().then((c) => {
-      setPacks(c)
-      if (c.length && !pack) setPack(c[0].id)
-    })
+    // пакет не выбирается сам: материалы не по теме брифа смешиваются с ним в колоде
+    api.content().then(setPacks)
     return () => clearInterval(iv)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [templates.length])
@@ -275,6 +273,14 @@ export default function Generate() {
                 <span className={`badge ${elapsed <= 300 ? 'ok' : 'err'}`}>{elapsed <= 300 ? 'уложились в 5 минут' : 'дольше 5 минут'}</span>
               )}
               {planEv && <span className="badge blue">план: {planEv.mode === 'llm' ? 'LLM' : 'офлайн'} · {planEv.slides} слайдов</span>}
+              {planEv?.materials === 'none' && (
+                <span className="badge warn" title="Модель оценила материалы как не относящиеся к теме брифа: их факты на слайды не переносятся">
+                  материалы не по теме брифа — колода по брифу
+                </span>
+              )}
+              {planEv?.materials === 'partial' && (
+                <span className="badge warn" title="Из материалов взяты только фрагменты по теме брифа">материалы по теме частично</span>
+              )}
               {run.manifest && <a className="btn sm" href={run.manifest} target="_blank">manifest.json</a>}
             </div>
             <div className="stages">

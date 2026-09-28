@@ -54,7 +54,26 @@ class OutlineSlide(BaseModel):
 class Outline(BaseModel):
     title: str
     subtitle: str = ""
+    materials_fit: str = "full"  # оценка модели: full | partial | none
     slides: list[OutlineSlide]
+
+
+def materials_fit(o: Outline, corpus: ContentCorpus, brief_text: str) -> str:
+    """Насколько материалы относятся к теме брифа, по ответу модели. Без материалов — «full»: сравнивать не с чем."""
+    if not corpus.chunks:
+        return "full"
+    v = (o.materials_fit or "").strip().lower()
+    # модели отвечают и по-английски, и по-русски
+    if v.startswith(("partial", "част")):
+        return "partial"
+    if not v.startswith(("none", "no", "нет", "не ")):
+        return "full"
+    # страховка от ошибки модели: если большинство слов брифа есть в материалах, они по теме хотя бы частично
+    stems = {w[:6] for w in re.findall(r"[a-zа-яё]{5,}", brief_text.lower())}
+    text = corpus.full_text().lower()
+    if stems and sum(st in text for st in stems) / len(stems) >= 0.6:
+        return "partial"
+    return "none"
 
 
 class WrittenSlide(BaseModel):
@@ -404,8 +423,12 @@ async def plan_with_llm(brief: Brief, corpus: ContentCorpus, profile: TemplatePr
     )
     o = _normalize_outline(o, brief)
     limit_sections(o, cap)
+    fit = materials_fit(o, corpus, brief.text)
     writer = skill_for_step(agent, "write_slides", "slide_writer")
-    wctx = select_context(corpus, brief.text, budget_chars=9000)
+    # материалы не по теме брифа автору текстов не передаются: иначе их факты попадают на слайды
+    wctx = "" if fit == "none" else select_context(corpus, brief.text, budget_chars=9000)
+    if fit == "none":
+        log.info("content pack does not match the brief: slides are written from the brief only")
 
     async def write(i: int, s: OutlineSlide) -> WrittenSlide | None:
         if s.intent in ("title", "section", "thanks"):
@@ -414,7 +437,7 @@ async def plan_with_llm(brief: Brief, corpus: ContentCorpus, profile: TemplatePr
             return await llm.run_skill(
                 writer, WrittenSlide, language=brief.language, max_words=15, max_bullets=5, deck_title=o.title,
                 purpose=brief.purpose, outline=[x.model_dump() for x in o.slides], index=i + 1, slide=s.model_dump(),
-                context=wctx, title_chars=title_chars,
+                context=wctx, title_chars=title_chars, brief=brief.text,
             )
         except (LLMError, Exception) as e:  # один неудачный слайд не должен ронять всю колоду
             log.warning("slide_writer failed for %d: %s", i + 1, e)
@@ -422,10 +445,12 @@ async def plan_with_llm(brief: Brief, corpus: ContentCorpus, profile: TemplatePr
 
     written = await asyncio.gather(*[write(i, s) for i, s in enumerate(o.slides)])
     specs = [_to_spec(i, s, w) for i, (s, w) in enumerate(zip(o.slides, written))]
-    plan = DeckPlan(title=o.title, subtitle=o.subtitle, purpose=brief.purpose, language=brief.language, slides=specs)
+    plan = DeckPlan(title=o.title, subtitle=o.subtitle, purpose=brief.purpose, language=brief.language, slides=specs,
+                    materials_fit=fit)
     plan = sanitize_plan(plan, o)
     complete_plan(plan, brief.n_slides)
-    dropped = drop_unsourced(plan, corpus, brief.text)
+    # числа из материалов не по теме источником не считаются
+    dropped = drop_unsourced(plan, corpus if fit != "none" else ContentCorpus(id=corpus.id), brief.text)
     if dropped:
         log.info("fact guard: %d lines with numbers absent from the materials dropped", dropped)
     if agent.enabled("headlines"):

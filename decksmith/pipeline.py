@@ -238,7 +238,7 @@ class Pipeline:
             timings["plan"] = round(time.time() - t0, 2)
             (rdir / "plan.json").write_text(plan.model_dump_json(indent=1), encoding="utf-8")
             await _emit(emit, stage="plan", status="done", t=timings["plan"], mode=mode, slides=len(plan.slides),
-                        titles=[s.title for s in plan.slides])
+                        titles=[s.title for s in plan.slides], materials=plan.materials_fit)
 
             t1 = time.time()
             palette_desc = f"#{profile.tokens.accent_hex}"
@@ -396,7 +396,7 @@ class Pipeline:
             "models": {"llm": self.cfg.llm.model if self.cfg.llm.enabled else "offline", "vlm": self.cfg.llm.vlm_model or self.cfg.llm.model,
                        "t2i": self.cfg.image.model if self.cfg.image.provider != "none" else None},
             "template": {"id": profile.id, "name": profile.name, "sha256": profile.sha256, "parser": profile.parser_version},
-            "content": {"id": corpus.id, "files": corpus.files, "chunks": len(corpus.chunks)},
+            "content": {"id": corpus.id, "files": corpus.files, "chunks": len(corpus.chunks), "fits_brief": plan.materials_fit},
             "brief": brief.model_dump(),
             "plan_mode": mode,
             "timings_s": timings,

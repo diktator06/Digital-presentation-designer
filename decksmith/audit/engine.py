@@ -30,6 +30,7 @@ VLM_QUESTIONS = {
     "q8": ("content.typos", "Опечатки в тексте", "fix_llm"),
     "q10": ("content.table_legend_relevant", "Строки таблицы/легенда не работают на мысль", None),
     "q11": ("content.adjacent_logic", "Нет логической связи с соседними слайдами", None),
+    "q12": ("content.on_brief", "Слайд не по теме брифа", None),
     "v1": ("layout.visual_overlap", "Визуально: наложение элементов", "shrink_text"),
     "v2": ("layout.visual_clipping", "Визуально: текст обрезан или вышел за свой блок", "shrink_text"),
 }
@@ -67,7 +68,7 @@ async def visual_audit(ctx: AuditContext, llm: LLMClient, agent: Agent, deadline
             intent = "agenda"  # список выводов и есть суть итогового слайда
         call = llm.run_skill(skill, None, images=[ctx.pngs[i]], index=i + 1, total=n, title=titles[i],
                              prev_title=titles[i - 1] if i else "", next_title=titles[i + 1] if i + 1 < n else "",
-                             facts=_facts_for(ctx, i))
+                             facts=_facts_for(ctx, i), brief=ctx.brief_text)
         try:
             if deadline is None:
                 res = await call
@@ -90,6 +91,8 @@ async def visual_audit(ctx: AuditContext, llm: LLMClient, agent: Agent, deadline
                 continue  # у обложек/разделителей по замыслу нет тезиса и тела
             if intent == "agenda" and q == "q1":
                 continue  # содержание или итоги называются, а не формулируются выводом
+            if kind in ("thanks", "contacts") and q == "q12":
+                continue  # финальный слайд благодарит, а не раскрывает тему
             cid, title, fixer = VLM_QUESTIONS[q]
             out.append(AuditIssue(
                 id=f"{cid}#{i}", check=cid, category="content" if q.startswith("q") else "layout", deterministic=False,

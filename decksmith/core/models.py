@@ -403,6 +403,7 @@ class DeckPlan(BaseModel):
     purpose: str = "product"
     language: str = "ru"
     slides: list[SlideSpec]
+    materials_fit: str = "full"  # насколько контент-пакет относится к теме брифа: full | partial | none
 
 
 # ----------------------------------------------------------------------------
