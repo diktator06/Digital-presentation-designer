@@ -42,7 +42,7 @@ DeckSmith читает чужой шаблон как **набор правил*
 | Вёрстка | `decksmith/layout` | `DeckPlan` × `TemplateProfile` × `Variant` → `.pptx` | детерминирована |
 | Рендер | `decksmith/render` | `.pptx` → `.pdf`, PNG | детерминирован (LibreOffice) |
 | Аудит | `decksmith/audit` | `.pptx` + PNG + профиль → `AuditReport`; фиксеры | правила — детерм.; VLM — нет |
-| Экспорт | `decksmith/export` | `.pdf` → `.html` | детерминирован |
+| Экспорт | `decksmith/export` | `.pdf` → `.html`; `TemplateProfile` → дизайн-система (.zip) | детерминирован |
 | Оркестрация | `decksmith/pipeline.py` | всё выше, 3 варианта параллельно, manifest | — |
 | API/UI | `decksmith/api`, `frontend/` | HTTP + SSE, React | — |
 
@@ -180,6 +180,12 @@ PDF (PyMuPDF), DOCX, PPTX, MD/TXT, CSV/XLSX → фрагменты, таблиц
 `.pptx` — только нативные объекты (текст, фигуры, таблицы, диаграммы с данными, картинки);
 `.pdf` — LibreOffice; `.html` — один самодостаточный файл: векторные SVG-слайды + скрытый
 текстовый слой, навигация с клавиатуры, обзор всех слайдов.
+
+Дизайн-система шаблона (`export/design_system.py`, `GET /api/templates/{id}/design-system.zip`) —
+профиль шаблона в переносимом виде, без повторного разбора и без модели: `tokens.json` в формате
+W3C Design Tokens (цвета с ролями и долей использования, цвета темы и диаграмм, семейства шрифтов,
+кегли ролей и вся шкала, размер слайда, поля, области заголовка и контента; размеры в px при 96 dpi,
+исходные pt — в `$extensions`), `tokens.css` с переменными `--ds-*`, `palette.svg` и README.
 
 ## Универсальность и устойчивость
 

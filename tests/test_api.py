@@ -54,3 +54,22 @@ def test_template_delete_is_complete_and_persistent(tmp_path):
     assert client.delete("/api/templates/not-a-template").status_code == 404
     assert client.delete("/api/templates/0123456789ab").status_code == 404
     api._save_deleted(api._deleted() - {tid})  # тестовый каталог остаётся чистым
+
+
+def test_design_system_download(tmp_path):
+    """Кнопка «Скачать дизайн-систему»: архив отдаётся с правильным типом и именем файла (в т. ч. кириллица)."""
+    client = TestClient(api.app)
+    src = GENERATORS["brand_footer"](tmp_path / "Фирменный шаблон.pptx")
+    tid = _upload(client, src)
+    try:
+        r = client.get(f"/api/templates/{tid}/design-system.zip")
+        assert r.status_code == 200, r.text
+        assert r.headers["content-type"] == "application/zip"
+        disposition = r.headers["content-disposition"]
+        assert 'filename="design-system.zip"' in disposition
+        assert "filename*=UTF-8''" in disposition and "_design-system.zip" in disposition
+        assert r.content[:2] == b"PK"  # zip
+        assert client.get("/api/templates/0123456789ab/design-system.zip").status_code == 404
+    finally:
+        client.delete(f"/api/templates/{tid}")
+        api._save_deleted(api._deleted() - {tid})

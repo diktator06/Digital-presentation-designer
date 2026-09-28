@@ -119,6 +119,7 @@ export const api = {
     fd.append('file', f)
     return fetch('/api/templates', { method: 'POST', body: fd }).then(j<TemplateCard>)
   },
+  designSystemUrl: (id: string) => `/api/templates/${id}/design-system.zip`,
   deleteTemplate: (id: string) =>
     fetch(`/api/templates/${id}`, { method: 'DELETE' }).then(j<{ deleted: string; name: string; uploads_removed: number }>),
   content: () => fetch('/api/content').then(j<ContentPack[]>),

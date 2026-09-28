@@ -69,6 +69,14 @@ export default function Templates() {
           <span className="muted small">{s.slide_size_in[0]}″×{s.slide_size_in[1]}″ · {s.n_layouts} макетов · {s.n_patterns} паттернов</span>
           <div className="spacer" />
           {error && <span className="badge err">{error}</span>}
+          <a
+            className="btn sm primary"
+            href={api.designSystemUrl(sel.id)}
+            download
+            title="Палитра, шрифты, кегли и поля шаблона: токены W3C (JSON), CSS-переменные, палитра SVG"
+          >
+            ⬇ Скачать дизайн-систему
+          </a>
           <button className="btn sm danger" disabled={deleting === sel.id} onClick={() => remove(sel.id, sel.name)}>
             {deleting === sel.id ? <span className="spin" /> : null} Удалить шаблон
           </button>

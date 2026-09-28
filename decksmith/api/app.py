@@ -13,10 +13,11 @@ import shutil
 import time
 import uuid
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -34,6 +35,7 @@ from decksmith.parsing.debug import overlay
 from decksmith.parsing.template_parser import PARSER_VERSION, analyze_template, file_sha256, summarize
 from decksmith.pipeline import Pipeline, apply_rewrites
 from decksmith.render.soffice import pdf_to_pngs, pptx_to_pdf
+from decksmith.export.design_system import design_system_zip
 from decksmith.export.exporters import to_html
 
 setup_logging()
@@ -189,6 +191,18 @@ def get_template(tid: str):
         lay["thumbnail"] = _url(lay["thumbnail"]) if lay.get("thumbnail") else None
     data["summary"] = _template_card(p)
     return data
+
+
+@app.get("/api/templates/{tid}/design-system.zip")
+def download_design_system(tid: str):
+    """Архив дизайн-системы шаблона: токены W3C (JSON), CSS-переменные, палитра SVG и README."""
+    p = TEMPLATES.get(tid)
+    if not p:
+        raise HTTPException(404, "Шаблон не найден")
+    name, data = design_system_zip(p)
+    # имя с кириллицей передаётся по RFC 5987; простое имя — для старых клиентов
+    disposition = f"attachment; filename=\"design-system.zip\"; filename*=UTF-8''{quote(name)}"
+    return Response(content=data, media_type="application/zip", headers={"Content-Disposition": disposition})
 
 
 @app.get("/api/templates/{tid}/patterns/{pid}/overlay.png")
