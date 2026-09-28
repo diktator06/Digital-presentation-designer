@@ -163,8 +163,8 @@ python scripts/stress.py <шаблоны...> --synthetic  # слепой стр�
 | аудит по картинке слайда | Qwen3.8-27B (модель финала) | Apache 2.0 |
 | иллюстрации | FLUX.2 [klein] 4B (хостинг), FLUX.1 [schnell] (свой GPU) | Apache 2.0 |
 
-Подробно: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — пайплайн и слои · [docs/MODELS.md](docs/MODELS.md) — модели,
-требования, ссылки на Hugging Face · [docs/AUDIT.md](docs/AUDIT.md) — проверки и тесты ·
+Подробно: [ARCHITECTURE.md](ARCHITECTURE.md) — пайплайн и слои · [MODELS.md](MODELS.md) — модели,
+требования, ссылки на Hugging Face · [AUDIT.md](AUDIT.md) — проверки и тесты ·
 [docs/UNIVERSALITY.md](docs/UNIVERSALITY.md) — работа на незнакомых шаблонах.
 
 ## Структура репозитория
@@ -179,8 +179,8 @@ python scripts/stress.py <шаблоны...> --synthetic  # слепой стр�
 | [config/](config/) | профили моделей (`default` — vLLM, `vsegpt` — хостинги, `local_ollama`), варианты вёрстки; `config/runs/` — конфиги воспроизводимых запусков |
 | [data/](data/) | куда класть шаблоны и ТЗ датасета; `sample_brief.md` — демо-контент |
 | [tests/](tests/) | тесты pytest; [scripts/](scripts/) — слепой стресс-тест и отчёт по нему |
-| [docs/](docs/) | архитектура, модели, аудит, универсальность, результаты стресс-теста, план питча |
-| корень | `Dockerfile`, `docker-compose.yml`, `pyproject.toml` (зависимости Python), `.env.example` |
+| [docs/](docs/) | универсальность на незнакомых шаблонах, результаты стресс-теста, план питча |
+| корень | документация по ТЗ: README, [ARCHITECTURE](ARCHITECTURE.md), [MODELS](MODELS.md), [AUDIT](AUDIT.md); `Dockerfile`, `docker-compose.yml`, `pyproject.toml` (зависимости Python), `.env.example` |
 
 `workspace/` (кэш разбора шаблонов, запуски, загрузки) создаётся при работе и в git не входит.
 

@@ -8,8 +8,8 @@ templates:
   - data/templates/lct2026.pptx
 content:
   - README.md
-  - docs/AUDIT.md
-  - docs/MODELS.md
+  - AUDIT.md
+  - MODELS.md
   - docs/STRESS_RESULTS.md
   - docs/UNIVERSALITY.md
   - docs/pitch/team.md

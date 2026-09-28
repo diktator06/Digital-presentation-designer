@@ -135,7 +135,7 @@ async def run_audit(ctx: AuditContext, llm: LLMClient | None = None, agent: Agen
 
 
 def catalogue() -> list[dict]:
-    """Все проверки с их природой — показываются в UI и docs/AUDIT.md."""
+    """Все проверки с их природой — показываются в UI и AUDIT.md."""
     rows = [{"id": m.id, "category": m.category, "title": m.title, "deterministic": True, "fixer": m.fixer} for m in CHECKS.values()]
     rows += [{"id": cid, "category": "content" if q.startswith("q") else "layout", "title": title, "deterministic": False,
               "fixer": fixer, "question": q} for q, (cid, title, fixer) in VLM_QUESTIONS.items()]
