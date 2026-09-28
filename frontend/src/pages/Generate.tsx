@@ -36,9 +36,8 @@ export default function Generate() {
   const [pack, setPack] = useState<string>('')
   const [purpose, setPurpose] = useState('product')
   const [nSlides, setNSlides] = useState(12)
-  const [brief, setBrief] = useState(
-    'Цифровой дизайнер презентаций — сервис, который по брифу и контент-пакету собирает презентацию в фирменном шаблоне компании и сам проверяет её качество.',
-  )
+  // бриф пишет пользователь: поле всегда начинается пустым
+  const [brief, setBrief] = useState('')
   const [runId, setRunId] = useState<string | null>(null)
   const [run, setRun] = useState<Run | null>(null)
   const [events, setEvents] = useState<RunEvent[]>([])
@@ -217,10 +216,11 @@ export default function Generate() {
         </div>
         <div className="field">
           <label>Что рассказать</label>
-          <textarea value={brief} onChange={(e) => setBrief(e.target.value)} onKeyDown={onKey} rows={6} />
+          <textarea value={brief} onChange={(e) => setBrief(e.target.value)} onKeyDown={onKey} rows={6}
+            placeholder="Кратко опишите, о чём презентация" />
         </div>
         <div className="send-row">
-          <button className="btn primary" onClick={start} disabled={!tpl || run?.status === 'running'}>
+          <button className="btn primary" onClick={start} disabled={!tpl || !brief.trim() || run?.status === 'running'}>
             {run?.status === 'running' ? <span className="spin" /> : '↵'} Сгенерировать 3 варианта
           </button>
           <span className="small muted"><span className="kbd">Enter</span> — запуск</span>
