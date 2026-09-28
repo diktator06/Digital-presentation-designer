@@ -31,8 +31,54 @@
 
 Без них сервис тоже работает: шаблон и контент загружаются в интерфейсе.
 
-**2. Файл `.env`:** `cp .env.example .env` и заполнить переменные ниже. Если поля модели пустые,
-сервис работает офлайн (экстрактивный план, аудит по правилам).
+**2. Ключ API и модели — файл `.env` в корне проекта.**
+
+```bash
+cp .env.example .env      # затем откройте .env в любом редакторе
+```
+
+Ключ API вставляется **только в `.env`**, в две строки: `DECKSMITH_LLM_API_KEY=` (план, тексты, аудит
+по картинке) и `DECKSMITH_IMAGE_API_KEY=` (иллюстрации). В коде и конфигах ключей нет, `.env` в git не
+попадает, Docker читает этот же файл. После правки `.env` перезапустите сервис. Без ключа (поля модели
+пустые) сервис работает офлайн: экстрактивный план и аудит по правилам.
+
+*Как делали мы — VseGPT.* Ключ создаётся в личном кабинете [vsegpt.ru](https://vsegpt.ru) (раздел
+API-ключей, оплата в рублях); один ключ подходит и для текстов, и для иллюстраций. Ориентир расхода:
+генерация трёх вариантов на сайте — около 20 ₽, `configs/demo.yaml` (9 колод) — 50–60 ₽.
+
+```ini
+DECKSMITH_CONFIG=config/vsegpt.yaml
+DECKSMITH_LLM_PROVIDER=openai_compatible
+DECKSMITH_LLM_BASE_URL=https://api.vsegpt.ru/v1
+DECKSMITH_LLM_API_KEY=ваш_ключ_VseGPT
+DECKSMITH_LLM_MODEL=qwen/qwen3.6-35b-a3b
+DECKSMITH_VLM_MODEL=qwen/qwen3.8-27b
+DECKSMITH_IMAGE_PROVIDER=openai_images
+DECKSMITH_IMAGE_BASE_URL=https://api.vsegpt.ru/v1
+DECKSMITH_IMAGE_API_KEY=ваш_ключ_VseGPT
+DECKSMITH_IMAGE_MODEL=img-flux/flux-2-klein-4b
+```
+
+*Другой провайдер.* VseGPT не обязателен: подходит любой OpenAI-совместимый API (`/chat/completions`,
+для иллюстраций — `/images/generations`). Меняются только адрес, ключ и имена моделей из каталога
+провайдера; по ТЗ — открытые веса до 35B.
+
+| Где модель | `DECKSMITH_CONFIG` | `DECKSMITH_LLM_BASE_URL` | Ключ | Модель, пример |
+|---|---|---|---|---|
+| VseGPT | `config/vsegpt.yaml` | `https://api.vsegpt.ru/v1` | ключ VseGPT | `qwen/qwen3.6-35b-a3b` |
+| OpenRouter и другие агрегаторы | `config/vsegpt.yaml` | `https://openrouter.ai/api/v1` | ключ агрегатора | Qwen3 из каталога агрегатора |
+| Свой GPU (vLLM) или инференс VK Cloud | пусто | `http://localhost:8001/v1` (адрес своего сервера) | пусто или ключ сервера | `Qwen/Qwen3-32B` |
+| Ollama на ноутбуке | `config/local_ollama.yaml` | задан в профиле | не нужен | `qwen3:4b` |
+
+При запуске в Docker сервер модели на этом же компьютере указывается как `http://host.docker.internal:<порт>/v1`
+вместо `localhost`.
+
+Иллюстрации можно брать у другого провайдера (свои `DECKSMITH_IMAGE_BASE_URL` и `DECKSMITH_IMAGE_API_KEY`)
+или выключить: `DECKSMITH_IMAGE_PROVIDER=none`. Пустой `DECKSMITH_VLM_MODEL` выключает аудит по
+картинке. Быстрая проверка ключа и модели: `decksmith run configs/real_model_smoke.yaml` (1 вариант, 8 слайдов,
+нужны файлы из шага 1; на VseGPT около 6 ₽) или одна генерация в интерфейсе.
+
+Все переменные:
 
 | Переменная | Что вписать | Пример |
 |---|---|---|
@@ -50,13 +96,12 @@
 | `DECKSMITH_WORKSPACE` | каталог кэша, запусков и загрузок | `workspace` |
 | `DECKSMITH_FONT_DOWNLOAD` | `0` — не докачивать открытые шрифты из Google Fonts | `1` |
 
-Готовые блоки для VseGPT, своего GPU (vLLM, инференс VK) и Ollama — в [.env.example](.env.example).
+Те же блоки с комментариями — в [.env.example](.env.example).
 
 **3а. Docker.**
 
 ```bash
-cp .env.example .env
-docker compose up --build        # http://localhost:8000
+docker compose up --build        # http://localhost:8000 (.env из шага 2)
 ```
 
 **3б. Локально.** Python 3.11+, Node 20+, LibreOffice (`soffice` в PATH или `DECKSMITH_SOFFICE`).
@@ -65,7 +110,6 @@ docker compose up --build        # http://localhost:8000
 python3 -m venv .venv && source .venv/bin/activate      # Windows: py -3 -m venv .venv; .venv\Scripts\activate
 pip install -e ".[dev]"
 (cd frontend && npm ci && npm run build)
-cp .env.example .env
 decksmith serve                                         # http://localhost:8000
 ```
 
