@@ -172,3 +172,17 @@ def test_catalogue_separates_deterministic_and_contextual():
     cat = catalogue()
     assert any(c["deterministic"] for c in cat) and any(not c["deterministic"] for c in cat)
     assert len([c for c in cat if c["deterministic"]]) >= 20
+
+
+def test_template_quirks_do_not_lower_the_score():
+    """Особенности самого шаблона («так в шаблоне») видны в отчёте, но балл не снижают; наши дефекты снижают."""
+    from decksmith.audit.engine import score
+    from decksmith.core.models import AuditIssue, Severity
+
+    def one(sev, inherited):
+        return AuditIssue(id="x", check="layout.overlap", category="layout", slide=0, message="",
+                          severity=sev, data={"inherited": inherited})
+
+    assert score([one(Severity.info, True)] * 5, 5) == 100.0
+    assert score([one(Severity.info, False)] * 5, 5) == 96.0
+    assert score([one(Severity.error, False), one(Severity.info, True)], 10) == 96.0

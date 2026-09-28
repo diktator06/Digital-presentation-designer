@@ -64,6 +64,11 @@ from decksmith.parsing.ooxml import contrast_ratio, rel_luminance
 from decksmith.parsing.template_parser import region_color, region_colors, title_clear_box
 
 log = logging.getLogger(__name__)
+# заглушка названия презентации в колонтитулах шаблона (RU/EN)
+TITLE_FILLER = re.compile(
+    r"^\s*((название|заголовок|тема)\s+(вашей\s+|нашей\s+)?(презентации|доклада|выступления)"
+    r"|(your\s+)?(presentation|deck)\s+(title|name)|(title|name)\s+of\s+(the\s+|your\s+)?presentation)\s*$",
+    re.IGNORECASE)
 EMU_PT = 12700
 
 
@@ -149,6 +154,8 @@ class DeckBuilder:
         images = images or {}
         icons = icons or {}
         specs = {s.id: s for s in plan.slides}
+        # заглушка «Название презентации» в колонтитулах мастеров и макетов получает название колоды
+        self._title_footers(list(self.prs.slide_masters) + self.layouts, plan.title)
         for n, d in enumerate(decisions):
             spec = specs[d.spec_id]
             before = len(self.prs.slides)
@@ -168,6 +175,7 @@ class DeckBuilder:
                 d.rationale += f" | fallback after error: {e}"
             if spec.notes:
                 slide.notes_slide.notes_text_frame.text = spec.notes
+            self._title_footers([slide], plan.title)
             for fld in slide._element.iter(qn("a:fld")):  # кэш номеров страниц у скопированных примеров
                 if fld.get("type") == "slidenum" and fld.find(qn("a:t")) is not None:
                     fld.find(qn("a:t")).text = str(n + 1)
@@ -182,6 +190,30 @@ class DeckBuilder:
                                        "source": source, "kind": kind, "rationale": d.rationale})
         delete_slides(self.prs, list(range(self.n_src)))
         return self.report
+
+    @staticmethod
+    def _title_footers(containers: list, title: str) -> None:
+        """Колонтитул с заглушкой названия презентации («Название презентации», «Presentation title») —
+        частая боковая или нижняя надпись шаблонов — получает название колоды. Настоящие фирменные
+        колонтитулы (компания, пометка о конфиденциальности) не трогаются.
+        """
+        title = " ".join(title.split())
+        if not title:
+            return
+        for c in containers:
+            for ph in c.placeholders:
+                try:
+                    footer = "FOOTER" in str(ph.placeholder_format.type)
+                except Exception:
+                    continue
+                if not (footer and ph.has_text_frame and TITLE_FILLER.match(ph.text_frame.text)):
+                    continue
+                # колонтитул рассчитан на короткую надпись: длинное название сокращается по границе слова
+                limit = max(2 * len(ph.text_frame.text.strip()), 32)
+                text = title
+                if len(text) > limit:
+                    text = text[:limit].rsplit(" ", 1)[0].rstrip(" ,.;:—-") + "…"
+                set_paragraphs(ph, [text])
 
     def save(self, path: str | Path) -> Path:
         """Сохраняет колоду."""

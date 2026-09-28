@@ -16,7 +16,7 @@
 **Результаты.** 9 презентаций (3 шаблона × 3 варианта, `configs/demo.yaml`) — в релизе
 [v1.0](https://github.com/diktator06/Digital-presentation-designer/releases/tag/v1.0): 125–220 с на
 шаблон, 0 ошибок аудита. Слепой стресс-тест на 31 незнакомом шаблоне: 93 колоды, 0 падений, 0 колод с
-ошибками, средний балл аудита 93.5 ([docs/STRESS_RESULTS.md](docs/STRESS_RESULTS.md)).
+ошибками, средний балл аудита 94.4 ([docs/STRESS_RESULTS.md](docs/STRESS_RESULTS.md)).
 
 ## Запуск
 
@@ -98,7 +98,7 @@ decksmith serve                                         # http://localhost:8000
 decksmith analyze шаблон.pptx --sheet            # профиль шаблона + картинка декомпозиции
 decksmith audit колода.pptx --template шаблон.pptx
 decksmith skills                                   # версии скиллов/агентов и каталог проверок
-pytest -q                                          # 62 теста (путь с моделью — на эмуляторе, без сети)
+pytest -q                                          # 64 теста (путь с моделью — на эмуляторе, без сети)
 python scripts/stress.py <шаблоны...> --synthetic  # слепой стресс-тест
 ```
 

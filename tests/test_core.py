@@ -239,3 +239,26 @@ def test_caps_and_letter_spacing_are_measured():
     plain = measure(["Визуализация"], "Arial", 24, 3000000, True)
     drawn = measure(["Визуализация"], "Arial", 24, 3000000, True, caps=True, tracking=3.0)
     assert drawn.longest_word_emu > plain.longest_word_emu * 1.2
+
+
+def test_footer_title_filler_gets_the_deck_title():
+    """Колонтитул-заглушка «Название презентации» получает название колоды (длинное — сокращается по слову),
+    фирменный колонтитул остаётся как в шаблоне.
+    """
+    from pptx import Presentation
+
+    from decksmith.layout.builder import DeckBuilder
+
+    prs = Presentation()
+    footers = [next(ph for ph in lay.placeholders if "FOOTER" in str(ph.placeholder_format.type))
+               for lay in list(prs.slide_layouts)[:3]]
+    for ph, text in zip(footers, ["НАЗВАНИЕ ПРЕЗЕНТАЦИИ", "ООО «Альфа», конфиденциально", "Presentation title"]):
+        ph.text_frame.text = text
+
+    DeckBuilder._title_footers(list(prs.slide_layouts)[:2], "Решение проблемы веса")
+    assert [f.text_frame.text for f in footers[:2]] == ["Решение проблемы веса", "ООО «Альфа», конфиденциально"]
+
+    long = "Цифровой дизайнер презентаций для корпоративных шаблонов любой сложности"
+    DeckBuilder._title_footers([prs.slide_layouts[2]], long)
+    short = footers[2].text_frame.text
+    assert short.endswith("…") and len(short) <= 2 * len("Presentation title") + 1 and long.startswith(short[:-1])

@@ -112,7 +112,8 @@ async def visual_audit(ctx: AuditContext, llm: LLMClient, agent: Agent, deadline
 
 def score(issues: list[AuditIssue], n_slides: int) -> float:
     """Итоговый балл 0–100: штраф по серьёзности замечаний в расчёте на слайд."""
-    penalty = sum(WEIGHTS[i.severity] for i in issues)
+    # особенности самого шаблона («так в шаблоне») видны в отчёте, но балл не снижают
+    penalty = sum(WEIGHTS[i.severity] for i in issues if not (i.data or {}).get("inherited"))
     return round(max(0.0, 100.0 - penalty * 10 / max(n_slides, 1)), 1)
 
 
