@@ -122,7 +122,7 @@ compose-блоков выбираются по контрасту ко **все�
 | `test_pipeline.py` | бизнес-сценарий на синтетическом (незнакомом) шаблоне и собственном контент-пакете: 3 колоды (PPTX/PDF/HTML) < 5 минут после Enter, манифест с версиями скиллов и обоснованием каждого слайда |
 
 ```bash
-pytest -q            # 58 тестов, ~4 мин (LibreOffice нужен для slow-тестов)
+pytest -q            # 59 тестов, ~4 мин (LibreOffice нужен для slow-тестов)
 pytest -q -m "not slow"
 python scripts/stress.py <шаблоны...> --synthetic   # слепой стресс-тест, см. docs/UNIVERSALITY.md
 ```

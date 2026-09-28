@@ -19,7 +19,7 @@ llm:
     reasoning: {enabled: false}
 
 image:
-  provider: ${DECKSMITH_IMAGE_PROVIDER:-none}   # none | openai_images | placeholder
+  provider: ${DECKSMITH_IMAGE_PROVIDER:-none}   # none | openai_images
   base_url: ${DECKSMITH_IMAGE_BASE_URL:-}
   api_key: ${DECKSMITH_IMAGE_API_KEY:-}
   model: ${DECKSMITH_IMAGE_MODEL:-img-flux/flux-2-klein-4b}   # FLUX.2 [klein] 4B, Apache 2.0

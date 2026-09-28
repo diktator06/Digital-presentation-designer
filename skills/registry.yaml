@@ -8,8 +8,7 @@ skills:
   shortener:        {active: v1}
   visual_audit:     {active: v2}
   fixer:            {active: v1}
-  pattern_labeler:  {active: v1}
   image_style:      {active: v1}
   json_repair:      {active: v1}
 agents:
-  deck_agent:       {active: v4}
+  deck_agent:       {active: v5}

@@ -13,7 +13,7 @@ llm:
     chat_template_kwargs: {enable_thinking: false}
 
 image:
-  provider: ${DECKSMITH_IMAGE_PROVIDER:-none}   # none | openai_images | placeholder
+  provider: ${DECKSMITH_IMAGE_PROVIDER:-none}   # none | openai_images
   base_url: ${DECKSMITH_IMAGE_BASE_URL:-}
   api_key: ${DECKSMITH_IMAGE_API_KEY:-}
   model: ${DECKSMITH_IMAGE_MODEL:-black-forest-labs/FLUX.1-schnell}

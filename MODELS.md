@@ -10,7 +10,7 @@ LM Studio, облачный провайдер или инференс VK для
 | LLM (план, тексты, сокращение, исправления) | Qwen3-32B | 32.8B, dense | Apache 2.0 | скиллы `outline`, `slide_writer`, `shortener`, `fixer` | https://huggingface.co/Qwen/Qwen3-32B |
 | LLM на хостинге (отборочный этап, по умолчанию в `config/vsegpt.yaml`) | Qwen3.6-35B-A3B | 35B MoE, 3B активных | Apache 2.0 | все текстовые скиллы: `outline`, `slide_writer`, `headline`, `shortener`, `fixer` | https://huggingface.co/Qwen/Qwen3.6-35B-A3B |
 | LLM (быстрая альтернатива) | Qwen3-30B-A3B-Instruct-2507 | 30.5B MoE, ≈3.3B активных | Apache 2.0 | те же скиллы при дефиците скорости | https://huggingface.co/Qwen/Qwen3-30B-A3B-Instruct-2507 |
-| VLM на хостинге (визуальный аудит; модель финала) | Qwen3.8-27B | 27B dense, текст + изображения | Apache 2.0 | скиллы `visual_audit`, `pattern_labeler` | https://huggingface.co/Qwen/Qwen3.8-27B |
+| VLM на хостинге (визуальный аудит; модель финала) | Qwen3.8-27B | 27B dense, текст + изображения | Apache 2.0 | скилл `visual_audit` | https://huggingface.co/Qwen/Qwen3.8-27B |
 | VLM на своём GPU | Qwen2.5-VL-32B-Instruct | 32B | Apache 2.0 | те же скиллы | https://huggingface.co/Qwen/Qwen2.5-VL-32B-Instruct |
 | VLM (альтернатива) | Qwen3-VL-30B-A3B-Instruct | 30B MoE | Apache 2.0 | то же | https://huggingface.co/Qwen/Qwen3-VL-30B-A3B-Instruct |
 | Text-to-image на хостинге (иллюстрации в слайдах) | FLUX.2 [klein] 4B | 4B | Apache 2.0 | `generation/images.py`, слайды `image_text` | https://huggingface.co/black-forest-labs/FLUX.2-klein-4B |
@@ -107,10 +107,11 @@ DECKSMITH_IMAGE_MODEL=img-flux/flux-2-klein-4b
   хостинге тексты пишет `qwen3.6-35b-a3b` (35B по сумме весов — в пределе ТЗ «до 35B»), а смысловой
   аудит делает `qwen3.8-27b` — модель финала. `qwen3-32b` остаётся рабочей альтернативой.
 
-Сквозной прогон (`decksmith run configs/real_model_e2e.yaml`: шаблон vk_education, контент — ТЗ,
-12 слайдов, 3 варианта, аудит по картинке каждого слайда): **2 мин 13 с – 2 мин 53 с** от старта
-до трёх колод в PPTX/PDF/HTML, из них план и тексты — 83–123 с (MacBook Air M1: рендер и аудит
-локально, модели — на хостинге). Модель со зрением действительно находит смысловые дефекты
+Сквозной прогон (`decksmith run configs/demo.yaml`: 3 шаблона датасета, контент — ТЗ, 12 слайдов,
+3 варианта, аудит по картинке каждого слайда, иллюстрации FLUX.2 [klein] 4B): **125–220 с** от старта
+до трёх колод в PPTX/PDF/HTML на каждый шаблон, из них план и тексты — 39–57 с (MacBook Air M1:
+рендер и аудит локально, модели — на хостинге). Результат — в релизе
+[v1.0](https://github.com/diktator06/Digital-presentation-designer/releases/tag/v1.0). Модель со зрением действительно находит смысловые дефекты
 Приложения 1: «заголовок называет тему, а не вывод», пустой слайд-раздел, текст под графикой.
 
 Стоимость: основная часть — аудит по картинке (по запросу на каждый слайд каждого варианта) на

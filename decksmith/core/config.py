@@ -38,7 +38,9 @@ _load_dotenv()
 def _interpolate(value):
     """Подставляет ${ENV:-default} во все строки конфигурации."""
     if isinstance(value, str):
-        return _ENV_RE.sub(lambda m: os.environ.get(m.group(1), m.group(2) or ""), value)
+        # как ${VAR:-default} в shell: пустая переменная (например, «DECKSMITH_LLM_MODEL=» в .env) берёт значение
+        # по умолчанию, а не выключает модель молча
+        return _ENV_RE.sub(lambda m: os.environ.get(m.group(1)) or (m.group(2) or ""), value)
     if isinstance(value, dict):
         return {k: _interpolate(v) for k, v in value.items()}
     if isinstance(value, list):
@@ -68,7 +70,7 @@ class LLMConfig(BaseModel):
 
 
 class ImageConfig(BaseModel):
-    provider: str = "none"  # none | openai_images | placeholder
+    provider: str = "none"  # none | openai_images
     base_url: str = ""
     api_key: str = ""
     model: str = "black-forest-labs/FLUX.1-schnell"

@@ -173,3 +173,15 @@ def test_every_variant_keeps_the_slide_count():
         assert len(vp.slides) == len(plan.slides), name
     dense = apply_variant(plan, load_variants()["dense"])
     assert "[summary]" in (dense.slides[1].notes or ""), "the analytic variant opens with its conclusions"
+
+
+def test_empty_env_value_takes_default(monkeypatch):
+    """Как ${VAR:-default} в shell: пустая переменная из .env берёт значение по умолчанию."""
+    from decksmith.core.config import _interpolate
+
+    monkeypatch.setenv("DECKSMITH_TEST_VAR", "")
+    assert _interpolate("${DECKSMITH_TEST_VAR:-по умолчанию}") == "по умолчанию"
+    monkeypatch.setenv("DECKSMITH_TEST_VAR", "задано")
+    assert _interpolate({"a": ["${DECKSMITH_TEST_VAR:-по умолчанию}"]}) == {"a": ["задано"]}
+    monkeypatch.delenv("DECKSMITH_TEST_VAR")
+    assert _interpolate("${DECKSMITH_TEST_VAR:-}") == ""
