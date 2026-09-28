@@ -43,7 +43,7 @@ export type Pattern = {
 }
 export type TemplateDetail = { id: string; name: string; patterns: Pattern[]; summary: TemplateCard; tokens: { slide_w: number; slide_h: number } }
 
-export type ContentPack = { id: string; files: string[]; chunks: number; tables: number; numbers: number; language: string }
+export type ContentPack = { id: string; files: string[]; chunks: number; tables: number; numbers: number; language: string; demo?: boolean }
 
 export type AuditIssue = {
   id: string

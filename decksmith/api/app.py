@@ -221,9 +221,17 @@ def pattern_overlay(tid: str, pid: str):
 # ----------------------------------------------------------------------------- контент
 @app.get("/api/content")
 def list_content():
-    """Список загруженных контент-пакетов."""
+    """Список загруженных контент-пакетов; демо-пакет помечен, чтобы кнопка «Демо-контент» была переключателем."""
+    demo = {str(p.resolve()) for p in _demo_files()}
     return [{"id": c.id, "files": [Path(f).name for f in c.files], "chunks": len(c.chunks), "tables": len(c.tables),
-             "numbers": len(c.numbers), "language": c.language} for c in CORPORA.values()]
+             "numbers": len(c.numbers), "language": c.language,
+             "demo": bool(demo) and {str(Path(f).resolve()) for f in c.files} == demo} for c in CORPORA.values()]
+
+
+def _demo_files() -> list[Path]:
+    """Файлы демо-контента: всё из data/content/ подходящих форматов, кроме README."""
+    return sorted(p for p in (ROOT / "data" / "content").glob("*")
+                  if p.suffix.lower() in (".pdf", ".md", ".docx", ".txt", ".pptx") and not p.stem.upper().startswith("README"))
 
 
 @app.post("/api/content")
@@ -253,17 +261,16 @@ async def upload_content(files: list[UploadFile] = File(...)):
 @app.post("/api/content/sample")
 async def sample_content():
     """Готовый контент-пакет: все файлы из data/content/ (текст задания в PDF, пример брифа...)."""
-    files = sorted(p for p in (ROOT / "data" / "content").glob("*")
-                   if p.suffix.lower() in (".pdf", ".md", ".docx", ".txt", ".pptx") and not p.stem.upper().startswith("README"))
+    files = _demo_files()
     if not files:
-        raise HTTPException(404, "data/content is empty")
+        raise HTTPException(404, "Папка data/content пуста: демо-контента нет")
     corpus = await asyncio.to_thread(ingest, files)
     d = WS / "content" / corpus.id
     d.mkdir(parents=True, exist_ok=True)
     (d / "corpus.json").write_text(corpus.model_dump_json(), encoding="utf-8")
     CORPORA[corpus.id] = corpus
     return {"id": corpus.id, "files": [p.name for p in files], "chunks": len(corpus.chunks), "tables": len(corpus.tables),
-            "numbers": len(corpus.numbers), "language": corpus.language}
+            "numbers": len(corpus.numbers), "language": corpus.language, "demo": True}
 
 
 # ----------------------------------------------------------------------------- запуски

@@ -59,6 +59,8 @@ main { padding: 24px; max-width: 1680px; margin: 0 auto; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn.sm { padding: 5px 10px; font-size: 12px; }
 .btn.danger { color: var(--err); }
+/* кнопка-переключатель во включённом состоянии */
+.btn.toggle.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
 .btn.danger:hover { border-color: var(--err); background: #fde8e8; }
 .seg { display: inline-flex; background: var(--bg); border-radius: 8px; padding: 3px; gap: 2px; }
 .seg button { border: 0; background: transparent; padding: 6px 10px; border-radius: 6px; cursor: pointer; color: var(--ink-2); font-weight: 550; }

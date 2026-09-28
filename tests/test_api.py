@@ -73,3 +73,16 @@ def test_design_system_download(tmp_path):
     finally:
         client.delete(f"/api/templates/{tid}")
         api._save_deleted(api._deleted() - {tid})
+
+
+def test_demo_content_pack_is_marked():
+    """Демо-пакет из data/content помечен: по этой метке кнопка «Демо-контент» работает как переключатель."""
+    client = TestClient(api.app)
+    r = client.post("/api/content/sample")
+    assert r.status_code == 200, r.text
+    pack = r.json()
+    assert pack["demo"] is True
+    listed = {c["id"]: c for c in client.get("/api/content").json()}
+    assert listed[pack["id"]]["demo"] is True
+    # пакет не из data/content демо-пакетом не считается
+    assert all(not c["demo"] for c in listed.values() if set(c["files"]) != set(pack["files"]))

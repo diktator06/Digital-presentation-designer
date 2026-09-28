@@ -104,7 +104,7 @@ decksmith run configs/pitch.yaml           # питч проекта на шаб
 decksmith analyze path/to/template.pptx --sheet   # профиль шаблона + картинка декомпозиции
 decksmith audit deck.pptx --template template.pptx
 decksmith skills                                   # версии скиллов/агентов и каталог проверок
-pytest -q                                          # 57 тестов
+pytest -q                                          # 58 тестов
 python scripts/stress.py <шаблоны...> --synthetic  # слепой стресс-тест + контакт-листы
 ```
 

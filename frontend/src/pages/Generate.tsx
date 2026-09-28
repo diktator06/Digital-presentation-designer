@@ -34,6 +34,9 @@ export default function Generate() {
   const [packs, setPacks] = useState<ContentPack[]>([])
   const [tpl, setTpl] = useState<string>('')
   const [pack, setPack] = useState<string>('')
+  // контент-пакет, выбранный до включения демо-контента: к нему возвращает повторное нажатие кнопки
+  const [packBeforeDemo, setPackBeforeDemo] = useState<string>('')
+  const [contentError, setContentError] = useState('')
   const [purpose, setPurpose] = useState('product')
   const [nSlides, setNSlides] = useState(12)
   // бриф пишет пользователь: поле всегда начинается пустым
@@ -135,18 +138,36 @@ export default function Generate() {
     // загрузка своего контент-пакета (PDF/DOCX/PPTX/MD/TXT/CSV/XLSX)
     if (!files?.length) return
     setBusy('content')
-    const p = await api.uploadContent([...files])
-    setPacks((x) => [p, ...x.filter((y) => y.id !== p.id)])
-    setPack(p.id)
-    setBusy('')
+    setContentError('')
+    try {
+      const p = await api.uploadContent([...files])
+      setPacks((x) => [p, ...x.filter((y) => y.id !== p.id)])
+      setPack(p.id)
+    } catch (e) {
+      setContentError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy('')
+    }
   }
-  const samplePack = async () => {
-    // готовый демо-контент из data/content/
+  const demoOn = packs.some((p) => p.id === pack && p.demo)
+  const toggleDemo = async () => {
+    // переключатель: включает демо-контент из data/content/, повторное нажатие возвращает прежний выбор
+    if (demoOn) {
+      setPack(packBeforeDemo)
+      return
+    }
     setBusy('content')
-    const p = await api.sampleContent()
-    setPacks((x) => [p, ...x.filter((y) => y.id !== p.id)])
-    setPack(p.id)
-    setBusy('')
+    setContentError('')
+    try {
+      const p = await api.sampleContent()
+      setPackBeforeDemo(pack === p.id ? '' : pack)
+      setPacks((x) => [p, ...x.filter((y) => y.id !== p.id)])
+      setPack(p.id)
+    } catch (e) {
+      setContentError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy('')
+    }
   }
 
   const elapsed = run ? (run.status === 'running' ? (now / 1000 - run.started) : run.elapsed_s ?? 0) : 0
@@ -198,9 +219,17 @@ export default function Generate() {
             <button className="btn sm" onClick={() => fileRef.current?.click()} disabled={busy === 'content'}>Загрузить</button>
             <input ref={fileRef} type="file" multiple hidden accept=".pdf,.docx,.pptx,.md,.txt,.csv,.xlsx" onChange={(e) => uploadPack(e.target.files)} />
           </div>
-          <button className="btn sm" style={{ alignSelf: 'flex-start' }} onClick={samplePack} disabled={busy === 'content'}>
-            {busy === 'content' ? <span className="spin" /> : null} Демо-контент (data/content)
+          <button
+            className={`btn sm toggle ${demoOn ? 'on' : ''}`}
+            style={{ alignSelf: 'flex-start' }}
+            onClick={toggleDemo}
+            disabled={busy === 'content'}
+            aria-pressed={demoOn}
+            title={demoOn ? 'Выключить демо-контент и вернуть прежний выбор' : 'Взять готовые материалы из папки data/content'}
+          >
+            {busy === 'content' ? <span className="spin" /> : demoOn ? '✓' : null} Демо-контент (data/content)
           </button>
+          {contentError && <span className="badge err" style={{ whiteSpace: 'normal' }}>{contentError}</span>}
         </div>
         <div className="field">
           <label>Назначение</label>
