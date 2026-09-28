@@ -38,4 +38,4 @@ pipeline:
 paths:
   workspace: workspace
   skills: skills
-  assets: assets
+  assets: decksmith/assets

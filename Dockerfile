@@ -25,8 +25,6 @@ COPY decksmith/ decksmith/
 RUN pip install --no-cache-dir -e .
 COPY skills/ skills/
 COPY config/ config/
-COPY configs/ configs/
-COPY assets/ assets/
 COPY data/ data/
 COPY --from=ui /ui/dist frontend/dist
 EXPOSE 8000

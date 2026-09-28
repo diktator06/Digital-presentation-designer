@@ -1,0 +1,27 @@
+# Питч самого проекта, собранный DeckSmith на шаблоне хакатона.
+# Структура задана (docs/pitch/pitch_plan.json), поэтому модель не нужна; документация
+# проекта и описание команды (docs/pitch/team.md) — это контент-пакет, и аудит сверяет
+# с ними каждое число на слайдах.
+# Положите «ЛЦТ2026 Шаблон презентации.pptx» в data/templates/ под именем lct2026.pptx:
+#   decksmith run config/runs/pitch.yaml
+templates:
+  - data/templates/lct2026.pptx
+content:
+  - README.md
+  - docs/AUDIT.md
+  - docs/MODELS.md
+  - docs/STRESS_RESULTS.md
+  - docs/UNIVERSALITY.md
+  - docs/pitch/team.md
+brief:
+  text: >
+    Питч решения DeckSmith команды Часыгова Мовсара (капитан, Fullstack / AI Engineer) и
+    Арсамаковой Хавы (UI/UX дизайнер) для задачи №4 VK Tech «Цифровой дизайнер презентаций»:
+    сервис по брифу и контент-пакету собирает презентацию в любом фирменном шаблоне
+    и сам проверяет её качество.
+  purpose: product
+  n_slides: 14
+  language: ru
+plan: docs/pitch/pitch_plan.json
+offline: true   # план задан; вызовов модели нет (аудит выполняет детерминированные проверки)
+variants: [balanced, visual, dense]

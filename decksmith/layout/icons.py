@@ -1,13 +1,13 @@
-"""Пиктограммы: набор иконок Lucide (ISC), перекрашенный в акцент шаблона.
+"""Пиктограммы: набор иконок Lucide (ISC, `decksmith/assets/lucide_icons.json`), перекрашенный в акцент шаблона.
 
 LLM выбирает ключевое слово иконки для каждого элемента; `resolve_icon` детерминированно
 сопоставляет ключевые слова RU/EN файлам иконок (точное имя -> синонимы -> подстрока).
 """
 from __future__ import annotations
 
+import json
 import re
 from functools import lru_cache
-from pathlib import Path
 
 import pymupdf
 
@@ -41,15 +41,17 @@ SYNONYMS = {
 DEFAULT_ICON = "circle-check"
 
 
-def icons_dir() -> Path:
-    """Каталог иконок."""
-    return settings().assets_dir / "icons"
+@lru_cache(maxsize=1)
+def icon_svgs() -> dict[str, str]:
+    """Набор иконок: имя -> SVG."""
+    # один файл вместо двух тысяч мелких SVG в репозитории
+    return json.loads((settings().assets_dir / "lucide_icons.json").read_text(encoding="utf-8"))
 
 
 @lru_cache(maxsize=1)
 def icon_names() -> list[str]:
     """Имена доступных иконок."""
-    return sorted(p.stem for p in icons_dir().glob("*.svg"))
+    return sorted(icon_svgs())
 
 
 def resolve_icon(keyword: str | None) -> str:
@@ -78,10 +80,7 @@ def render_icon(name: str, color_hex: str, size_px: int = 256, stroke: float = 2
     out = out_dir / f"{name}_{color_hex}_{size_px}.png"
     if out.exists():
         return str(out)
-    src = icons_dir() / f"{name}.svg"
-    if not src.exists():
-        src = icons_dir() / f"{DEFAULT_ICON}.svg"
-    svg = src.read_text(encoding="utf-8")
+    svg = icon_svgs().get(name) or icon_svgs()[DEFAULT_ICON]
     svg = svg.replace("currentColor", f"#{color_hex}")
     svg = re.sub(r'stroke-width="[\d.]+"', f'stroke-width="{stroke}"', svg)
     svg = re.sub(r'width="24"\s+height="24"', f'width="{size_px}" height="{size_px}"', svg, count=1)

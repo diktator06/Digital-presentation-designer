@@ -100,7 +100,7 @@ class PipelineConfig(BaseModel):
 class PathsConfig(BaseModel):
     workspace: str = "workspace"
     skills: str = "skills"
-    assets: str = "assets"
+    assets: str = "decksmith/assets"
 
     def resolve(self, p: str) -> Path:
         """Путь относительно корня проекта."""
