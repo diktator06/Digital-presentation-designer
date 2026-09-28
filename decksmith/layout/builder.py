@@ -655,7 +655,7 @@ class DeckBuilder:
         rpr = sh._element.find(".//" + qn("a:rPr"))
         size = int(rpr.get("sz")) / 100 if rpr is not None and rpr.get("sz") else (slot.style.size or self.profile.tokens.type_scale.title)
         font = slot.style.font or self.profile.tokens.heading_font
-        m = measure(paras, font, size, slot.box.w, slot.style.bold)
+        m = measure(paras, font, size, slot.box.w, slot.style.bold, caps=slot.style.caps, tracking=slot.style.tracking)
         x0, pad = int(bd.left), max(int(sh.left) - int(bd.left), 0)
         right = min(int(sh.left) + m.width_emu + pad, slot.box.r + pad)
         bd.width = max(right - x0, 2 * pad + int(0.05 * self.profile.tokens.slide_w))
@@ -757,6 +757,9 @@ class DeckBuilder:
         # интервалы между абзацами и межстрочный интервал занимают свою долю высоты
         styles = paragraph_styles(slide, sh)[1]
         gaps, line = spacing(styles)
+        # капс и разрядка шаблона расширяют слова: замер идёт так, как текст нарисует рендерер
+        caps = slot.style.caps or any(s.caps for s in styles)
+        trk = max([slot.style.tracking] + [s.tracking for s in styles])
         if styles and styles[0].size and not slot.para_roles and abs(styles[0].size - size) > 0.5:
             # рамка рисуется унаследованным кеглем: масштаб автоподбора примера не переносится
             size = styles[0].size
@@ -772,16 +775,17 @@ class DeckBuilder:
             heads = [i for i, t in enumerate(tidx) if t == 0]
             body = min((s for s, t in zip(psizes, tidx) if t != 0), default=0)
             fh = 1.0
-            if heads and body and fit_composite(paras, psizes, font, box_w, fit_h) < 0.99:
+            if heads and body and fit_composite(paras, psizes, font, box_w, fit_h, caps=caps, tracking=trk) < 0.99:
                 for k in (0.9, 0.8, 0.7, 0.6, 0.5):
                     if psizes[heads[0]] * k < 1.2 * body:
                         break
                     fh = k
-                    if fit_composite(paras, [s * (k if t == 0 else 1) for s, t in zip(psizes, tidx)], font, box_w, fit_h) >= 0.99:
+                    if fit_composite(paras, [s * (k if t == 0 else 1) for s, t in zip(psizes, tidx)], font, box_w, fit_h,
+                                     caps=caps, tracking=trk) >= 0.99:
                         break
                 scale_paragraph_sizes(sh, heads, fh, default_size=psizes[heads[0]])
                 psizes = [s * (fh if t == 0 else 1) for s, t in zip(psizes, tidx)]
-            f = fit_composite(paras, psizes, font, box_w, fit_h)
+            f = fit_composite(paras, psizes, font, box_w, fit_h, caps=caps, tracking=trk)
             if f < 0.99:
                 scale_font_sizes(sh, f, default_size=size)
             if room is not None:
@@ -794,12 +798,13 @@ class DeckBuilder:
         floor_ratio = 0.7 if size <= 1.3 * ts.body else max(ts.body * 0.85 / size, 0.35)
         if slot.role == SlotRole.title:
             floor_ratio = min(floor_ratio, 0.6)
-        fitted = fit_font_size(paras, font, size, box_w, fit_h, slot.style.bold, floor_ratio, allowed)
+        fitted = fit_font_size(paras, font, size, box_w, fit_h, slot.style.bold, floor_ratio, allowed, caps, trk)
         if fitted is None:
             min_size = snap_down(max(size * floor_ratio, ts.caption), allowed)
             set_font_size(sh, min_size)
             self.report.overflows.append(Overflow(slide=n, shape_id=sh.shape_id, role=slot.role.value, paragraphs=paras,
-                                                  budget=max_chars_for(box_w, fit_h, font, min_size, slot.style.bold)))
+                                                  budget=max_chars_for(box_w, fit_h, font, min_size, slot.style.bold,
+                                                                       caps, trk)))
         elif fitted < size - 0.05:
             set_font_size(sh, fitted)
         if room is not None:
@@ -911,13 +916,17 @@ class DeckBuilder:
                 title_ph.left, title_ph.top, title_ph.width, title_ph.height = tb.x, tb.y, clear.w, tb.h
                 tb = clear
             size, font, bold = t.type_scale.title, t.heading_font, False
+            # плейсхолдер заголовка макета может наследовать капс и разрядку
+            ps = paragraph_styles(slide, title_ph)[1]
+            caps, trk = any(s.caps for s in ps), max([s.tracking for s in ps] or [0.0])
         else:
+            caps, trk = False, 0.0
             tb = self._clear_title_box(idx, tb) or tb
             font, size, bold, color = self._title_style()
             font, size = font or t.heading_font, size or t.type_scale.title
         # заголовок должен помещаться в свою рамку: переполненный заголовок наезжает на контент или уходит за
         # слайд
-        fitted = fit_font_size([spec.title], font, size, tb.w, tb.h, bold, 0.6, allowed)
+        fitted = fit_font_size([spec.title], font, size, tb.w, tb.h, bold, 0.6, allowed, caps, trk)
         overflow = fitted is None
         if overflow:
             fitted = snap_down(size * 0.6, allowed)
@@ -934,8 +943,8 @@ class DeckBuilder:
             title_id = shp.shape_id
         if overflow:  # сокращается шагом LLM (скилл shortener), если модель подключена
             self.report.overflows.append(Overflow(slide=n, shape_id=title_id, role="title", paragraphs=[spec.title],
-                                                  budget=max_chars_for(tb.w, tb.h, font, fitted, bold)))
-        need = measure([spec.title], font, fitted, tb.w, bold).height_emu
+                                                  budget=max_chars_for(tb.w, tb.h, font, fitted, bold, caps, trk)))
+        need = measure([spec.title], font, fitted, tb.w, bold, caps=caps, tracking=trk).height_emu
         title_bottom = tb.b if anchor_bottom else max(tb.b, min(tb.y + need, tb.b + need // 2))
         # контент ниже начинается под последней строкой заголовка: рамка может вырасти туда
         if title_bottom > tb.b:

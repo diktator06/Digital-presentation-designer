@@ -29,7 +29,7 @@ from decksmith.export.exporters import to_html
 from decksmith.generation.images import generate_images
 from decksmith.generation.llm import LLMClient, Telemetry
 from decksmith.generation.planner import Brief, make_plan
-from decksmith.generation.skills import Agent, load_agent, load_skill
+from decksmith.generation.skills import Agent, load_agent, load_skill, skills_manifest
 from decksmith.layout.builder import DeckBuilder
 from decksmith.layout.icons import icon_for
 from decksmith.layout.pptx_ops import set_paragraphs, shape_by_id
@@ -254,10 +254,15 @@ class Pipeline:
                 self._variant(all_variants[n], chosen[n], profile, corpus, brief, images, icons, rdir, llm, emit, t0) for n in names
             ])
         timings["total"] = round(time.time() - t0, 2)
-        manifest = self._manifest(run_id, rdir, profile, corpus, brief, plan, mode, results, timings)
+        try:
+            manifest = str(self._manifest(run_id, rdir, profile, corpus, brief, plan, mode, results, timings))
+        except Exception as e:
+            # колоды уже готовы: сбой записи манифеста не должен превращать запуск в ошибку
+            log.exception("manifest failed: %s", e)
+            manifest = ""
         await _emit(emit, stage="done", status="done", t=timings["total"], run_id=run_id)
         return RunResult(run_id=run_id, dir=str(rdir), plan=plan, plan_mode=mode, variants=list(results), timings=timings,
-                         manifest=str(manifest))
+                         manifest=manifest)
 
     async def _variant(self, v: Variant, chosen: tuple[DeckPlan, list], profile: TemplateProfile, corpus: ContentCorpus,
                        brief: Brief, images: dict[str, str], icons: dict, rdir: Path, llm: LLMClient, emit: Emit | None,
@@ -383,13 +388,7 @@ class Pipeline:
 
     def _manifest(self, run_id, rdir: Path, profile, corpus, brief, plan, mode, results, timings) -> Path:
         """Пишет манифест запуска: время этапов, версии скиллов, телеметрия модели, обоснования вёрстки."""
-        skills_used = {}
-        for step in self.agent.steps:
-            ref = step.get("skill")
-            if ref:
-                name, _, ver = ref.partition("@")
-                sk = load_skill(name, ver or None)
-                skills_used[step["name"]] = {"skill": sk.ref, "sha256": sk.sha256, "enabled": step.get("enabled", True)}
+        skills_used = skills_manifest(self.agent)
         m = {
             "run_id": run_id,
             "agent": {"name": self.agent.name, "version": self.agent.version, "sha256": self.agent.sha256},

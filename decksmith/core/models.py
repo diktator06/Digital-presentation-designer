@@ -179,6 +179,8 @@ class TextStyle(BaseModel):
     bold: bool = False
     color_hex: str | None = None
     align: str | None = None
+    caps: bool = False  # шаблон рисует текст заглавными
+    tracking: float = 0.0  # pt, разрядка между знаками
 
 
 class Slot(BaseModel):

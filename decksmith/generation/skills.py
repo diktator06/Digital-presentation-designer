@@ -74,28 +74,33 @@ def _root() -> Path:
     return settings().skills_dir
 
 
-@lru_cache(maxsize=1)
+@lru_cache(maxsize=256)
+def _read_yaml(path: str, mtime_ns: int) -> tuple[dict, str]:
+    """Содержимое YAML-файла и его короткий sha256 (ключ кэша включает время изменения файла)."""
+    raw = Path(path).read_bytes()
+    return yaml.safe_load(raw.decode("utf-8")) or {}, hashlib.sha256(raw).hexdigest()[:12]
+
+
+def _yaml(path: Path) -> tuple[dict, str]:
+    """YAML с диска: правка или удаление файла видны работающему сервису сразу, без перезапуска."""
+    return _read_yaml(str(path), path.stat().st_mtime_ns)
+
+
 def registry() -> dict:
     """Реестр активных версий скиллов и агентов."""
-    return yaml.safe_load((_root() / "registry.yaml").read_text(encoding="utf-8"))
+    return _yaml(_root() / "registry.yaml")[0]
 
 
-def _sha(p: Path) -> str:
-    """Короткий sha256 файла (для манифеста)."""
-    return hashlib.sha256(p.read_bytes()).hexdigest()[:12]
-
-
-@lru_cache(maxsize=64)
 def load_skill(name: str, version: str | None = None) -> Skill:
     """Загружает скилл нужной (по умолчанию активной) версии."""
     version = version or registry()["skills"][name]["active"]
     path = _root() / name / f"{version}.yaml"
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    data, sha = _yaml(path)
     return Skill(
         name=name,
         version=version,
         path=path,
-        sha256=_sha(path),
+        sha256=sha,
         system=data.get("system", ""),
         user=data["user"],
         model=data.get("model", "default"),
@@ -107,14 +112,31 @@ def load_skill(name: str, version: str | None = None) -> Skill:
     )
 
 
-@lru_cache(maxsize=8)
 def load_agent(name: str = "deck_agent", version: str | None = None) -> Agent:
     """Загружает агента нужной (по умолчанию активной) версии."""
     version = version or registry()["agents"][name]["active"]
     path = _root() / "agents" / name / f"{version}.yaml"
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    return Agent(name=name, version=version, path=path, sha256=_sha(path), steps=data["steps"],
+    data, sha = _yaml(path)
+    return Agent(name=name, version=version, path=path, sha256=sha, steps=data["steps"],
                  description=data.get("description", ""))
+
+
+def skills_manifest(agent: Agent) -> dict:
+    """Версии и sha256 скиллов по шагам агента для манифеста запуска. Недоступная версия скилла
+    (удалена или повреждена) отмечается в манифесте и не роняет запуск, колоды которого уже готовы.
+    """
+    out = {}
+    for step in agent.steps:
+        ref = step.get("skill")
+        if not ref:
+            continue
+        name, _, ver = ref.partition("@")
+        try:
+            sk = load_skill(name, ver or None)
+            out[step["name"]] = {"skill": sk.ref, "sha256": sk.sha256, "enabled": step.get("enabled", True)}
+        except (OSError, KeyError, ValueError, yaml.YAMLError) as e:
+            out[step["name"]] = {"skill": ref, "error": f"{type(e).__name__}: {e}", "enabled": step.get("enabled", True)}
+    return out
 
 
 def skill_for_step(agent: Agent, step: str, default_skill: str) -> Skill:

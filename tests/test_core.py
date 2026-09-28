@@ -185,3 +185,57 @@ def test_empty_env_value_takes_default(monkeypatch):
     assert _interpolate({"a": ["${DECKSMITH_TEST_VAR:-по умолчанию}"]}) == {"a": ["задано"]}
     monkeypatch.delenv("DECKSMITH_TEST_VAR")
     assert _interpolate("${DECKSMITH_TEST_VAR:-}") == ""
+
+
+def test_skill_files_are_reread_after_change(tmp_path, monkeypatch):
+    """Правка промпта на диске видна работающему сервису без перезапуска; недоступный скилл отмечается в
+    манифесте, а не роняет запуск.
+    """
+    import os
+
+    from decksmith.generation import skills
+
+    monkeypatch.setattr(skills, "_root", lambda: tmp_path)
+    (tmp_path / "registry.yaml").write_text("skills:\n  demo: {active: v1}\nagents: {}\n", encoding="utf-8")
+    (tmp_path / "demo").mkdir()
+    f = tmp_path / "demo" / "v1.yaml"
+    f.write_text("user: первая версия\n", encoding="utf-8")
+    assert skills.load_skill("demo").user == "первая версия"
+    f.write_text("user: вторая версия\n", encoding="utf-8")
+    st = f.stat()
+    os.utime(f, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))  # гарантированно новое время изменения
+    assert skills.load_skill("demo").user == "вторая версия"
+
+    agent = skills.Agent(name="a", version="v1", path=f, sha256="", steps=[
+        {"name": "ok", "skill": "demo@v1"}, {"name": "gone", "skill": "removed@v1", "enabled": False}])
+    m = skills.skills_manifest(agent)
+    assert m["ok"]["skill"] == "demo@v1" and m["ok"]["sha256"]
+    assert "FileNotFoundError" in m["gone"]["error"]
+
+
+def test_caps_and_letter_spacing_are_measured():
+    """Капс (cap="all") и разрядка (spc) шаблона читаются из OOXML и расширяют замер: иначе рендерер рвёт
+    слова заголовка посередине.
+    """
+    from pptx import Presentation
+    from pptx.oxml.ns import qn
+    from pptx.util import Emu
+
+    from decksmith.layout.textfit import measure
+    from decksmith.parsing.ooxml import StyleResolver, parse_theme
+
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    tb = slide.shapes.add_textbox(Emu(0), Emu(0), Emu(3000000), Emu(600000))
+    tb.text_frame.text = "Визуализация"
+    rpr = tb.text_frame.paragraphs[0].runs[0]._r.get_or_add_rPr()
+    rpr.set("cap", "all")
+    rpr.set("spc", "300")
+    p = tb.text_frame.paragraphs[0]
+    st = StyleResolver(slide, parse_theme(slide.slide_layout.slide_master)).resolve(tb, p, p.runs[0])
+    assert st.caps is True and st.tracking == 3.0
+    assert rpr.tag == qn("a:rPr")
+
+    plain = measure(["Визуализация"], "Arial", 24, 3000000, True)
+    drawn = measure(["Визуализация"], "Arial", 24, 3000000, True, caps=True, tracking=3.0)
+    assert drawn.longest_word_emu > plain.longest_word_emu * 1.2

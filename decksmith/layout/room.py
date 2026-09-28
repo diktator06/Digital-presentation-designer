@@ -178,7 +178,7 @@ def text_height(slide, sh, width: int, font: str) -> int:
     if not paras:
         return 0
     l, t, r, b = text_insets(sh)
-    rich = [(s.size or 14, s.bold, s.space_before, s.space_after, s.line, s.font or font) for s in styles]
+    rich = [(s.size or 14, s.bold, s.space_before, s.space_after, s.line, s.font or font, s.caps, s.tracking) for s in styles]
     return measure_rich(paras, rich, width - (l + r - 2 * DEFAULT_INSET_LR), inset_lr=DEFAULT_INSET_LR,
                         inset_tb=(t + b) // 2).height_emu
 

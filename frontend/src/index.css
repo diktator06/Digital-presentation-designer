@@ -90,7 +90,7 @@ textarea:focus, select:focus, input:focus { outline: 2px solid var(--accent-soft
 .tpl-pick button { border: 2px solid transparent; border-radius: 8px; padding: 0; overflow: hidden; cursor: pointer; background: var(--bg); text-align: left; }
 .tpl-pick button.on { border-color: var(--accent); }
 .tpl-pick img { display: block; width: 100%; aspect-ratio: 16/9; object-fit: cover; }
-.tpl-pick span { display: block; padding: 4px 6px; font-size: 11px; font-weight: 600; }
+.tpl-pick span { display: block; padding: 4px 6px; font-size: 11px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .send-row { display: flex; align-items: center; gap: 10px; }
 .timer { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 28px; letter-spacing: -0.02em; }
 .stages { display: grid; grid-template-columns: 140px repeat(3, 1fr); gap: 6px 12px; align-items: center; }

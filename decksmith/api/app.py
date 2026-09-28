@@ -98,11 +98,12 @@ async def startup() -> None:
 
     async def warm():
         # шаблоны датасета разбираются в фоне при старте (работа до Enter), кроме удалённых пользователем
-        for t in sorted((ROOT / "data" / "templates").glob("*.pptx")):
+        sources = [(t, t.stem) for t in sorted((ROOT / "data" / "templates").glob("*.pptx"))]
+        for t, name in sources + await asyncio.to_thread(_stale_sources, {file_sha256(t)[:12] for t, _ in sources}):
             try:
                 if file_sha256(t)[:12] in _deleted():
                     continue
-                prof = await asyncio.to_thread(analyze_template, t, name=t.stem)
+                prof = await asyncio.to_thread(analyze_template, t, name=name)
                 if prof.id in _deleted():
                     # шаблон удалили, пока он разбирался: кэш разбора тоже убирается
                     shutil.rmtree(WS / "templates" / prof.id, ignore_errors=True)
@@ -111,6 +112,27 @@ async def startup() -> None:
             except Exception as e:
                 log.warning("warmup failed for %s: %s", t, e)
     asyncio.create_task(warm())
+
+
+def _stale_sources(skip: set[str]) -> list[tuple[Path, str]]:
+    """Загруженные через сайт шаблоны, профиль которых разобран прежней версией разборщика: (исходный файл, имя).
+    После обновления кода они разбираются заново с тем же id и именем, а не пропадают из списка.
+    """
+    deleted = _deleted()
+    # исходник загруженного шаблона — файл в uploads с тем же sha (id шаблона — начало sha файла)
+    uploads = {file_sha256(f)[:12]: f for f in (WS / "uploads").glob("*") if f.is_file()}
+    out = []
+    for tid, src in sorted(uploads.items()):
+        p = WS / "templates" / tid / "profile.json"
+        if tid in deleted or tid in skip or tid in TEMPLATES or not p.exists():
+            continue
+        try:
+            prof = TemplateProfile.model_validate_json(p.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if prof.parser_version != PARSER_VERSION:
+            out.append((src, prof.name))
+    return out
 
 
 def _url(path: str | Path | None) -> str | None:

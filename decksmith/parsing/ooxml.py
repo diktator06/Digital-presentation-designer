@@ -352,6 +352,8 @@ class EffStyle:
     space_before: float = 0.0  # пт, интервалы абзаца (разрешаются так же, как стиль фрагмента)
     space_after: float = 0.0
     line: float = 1.0  # множитель межстрочного интервала (1.0 = одинарный)
+    caps: bool = False  # текст рисуется заглавными (cap="all" / "small")
+    tracking: float = 0.0  # пт, разрядка между знаками (spc)
 
 
 class StyleResolver:
@@ -393,6 +395,40 @@ class StyleResolver:
         if pt is not None:
             return "bodyStyle"
         return "otherStyle"
+
+    def _caps_tracking(self, shape, paragraph, run, lvl: int) -> tuple[bool, float]:
+        """Капс (cap) и разрядка (spc, сотые пункта) по той же цепочке наследования, что кегль: фрагмент,
+        абзац, lstStyle фигуры и унаследованных плейсхолдеров (с их образцовыми фрагментами), стиль мастера.
+        """
+        found: dict[str, str] = {}
+
+        def take(el) -> None:
+            # первое найденное значение каждого атрибута побеждает
+            if el is not None:
+                for a in ("cap", "spc"):
+                    if a not in found and el.get(a) is not None:
+                        found[a] = el.get(a)
+
+        if run is not None:
+            take(run._r.find(qn("a:rPr")))
+        if paragraph is not None:
+            ppr = paragraph._p.find(qn("a:pPr"))
+            take(ppr.find(qn("a:defRPr")) if ppr is not None else None)
+        for sh in self._chain(shape):
+            txb = sh._element.find(qn("p:txBody"))
+            for a in ("cap", "spc"):
+                v = _lvl_prop(txb, lvl, a)
+                if a not in found and v is not None:
+                    found[a] = v
+            if sh is not shape and txb is not None:
+                r = txb.find(qn("a:p") + "/" + qn("a:r"))
+                take(r.find(qn("a:rPr")) if r is not None else None)
+        take(_txstyle(self.master, self._master_style_kind(shape), lvl))
+        try:
+            tracking = int(found.get("spc", "0")) / 100
+        except ValueError:
+            tracking = 0.0
+        return found.get("cap") in ("all", "small"), tracking
 
     def resolve(self, shape, paragraph=None, run=None) -> EffStyle:
         st = EffStyle()
@@ -473,6 +509,7 @@ class StyleResolver:
             st.font = self.theme.major_font if self._master_style_kind(shape) == "titleStyle" else self.theme.minor_font
         if st.color is None:
             st.color = self.theme.scheme("tx1") or "000000"
+        st.caps, st.tracking = self._caps_tracking(shape, paragraph, run, lvl)
         # масштаб автоподбора
         txb = shape._element.find(qn("p:txBody"))
         if txb is not None:

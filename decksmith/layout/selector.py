@@ -177,11 +177,12 @@ def _row_length(p: Pattern) -> int:
 
 
 @lru_cache(maxsize=4096)
-def _title_ratio(title: str, font: str, size: float, bold: bool, w: int, h: int) -> float:
+def _title_ratio(title: str, font: str, size: float, bold: bool, w: int, h: int, caps: bool = False,
+                 tracking: float = 0.0) -> float:
     """Наибольшая из долей 100/85/70/60 % от кегля, при которой заголовок помещается в рамку (0, если ни
     одна).
     """
-    return next((r for r in (1.0, 0.85, 0.7, 0.6) if fits([title], font, size * r, w, h, bold)), 0.0)
+    return next((r for r in (1.0, 0.85, 0.7, 0.6) if fits([title], font, size * r, w, h, bold, caps, tracking)), 0.0)
 
 
 def score_pattern(p: Pattern, spec: SlideSpec, variant: Variant, used: dict[str, int], prev: str | None,
@@ -274,7 +275,8 @@ def score_pattern(p: Pattern, spec: SlideSpec, variant: Variant, used: dict[str,
         if spec.subtitle or spec.message:
             h = min(h, owned_height(t_slot, [sl for sl in p.slots if sl.kind == "text" and sl.item_index is None
                                              and sl.role in (SlotRole.subtitle, SlotRole.body)]))
-        r = _title_ratio(spec.title, t_slot.style.font or "Arial", t_slot.style.size, t_slot.style.bold, tb.w, h)
+        r = _title_ratio(spec.title, t_slot.style.font or "Arial", t_slot.style.size, t_slot.style.bold, tb.w, h,
+                         t_slot.style.caps, t_slot.style.tracking)
         if r < 1.0:
             s -= {0.85: 0.4, 0.7: 0.9, 0.6: 1.4}.get(r, 2.0)
             why.append(f"title at {r:.0%} of its size" if r else "title does not fit")

@@ -24,6 +24,29 @@ class Measure:
     longest_word_emu: int
 
 
+class _Drawn:
+    """Шрифт, который меряет текст так, как его нарисует рендерер: заглавными при капсе шаблона
+    (cap="all") и с разрядкой между буквами (spc). Остальные свойства — как у исходного шрифта.
+    """
+
+    def __init__(self, font, caps: bool, tracking_px: float):
+        self.font, self.caps, self.tracking_px = font, caps, tracking_px
+
+    def getlength(self, text: str) -> float:
+        """Ширина текста в пикселях с учётом капса и разрядки."""
+        t = text.upper() if self.caps else text
+        return self.font.getlength(t) + self.tracking_px * len(t)
+
+    def __getattr__(self, name):
+        return getattr(self.font, name)
+
+
+def _font(family: str, size_pt: float, bold: bool, caps: bool = False, tracking: float = 0.0):
+    """Шрифт для замера: реальные метрики семейства плюс капс и разрядка (в пт на знак) из стиля шаблона."""
+    font = pil_font(family or "Arial", int(round(size_pt * PX_PER_PT)), bold)
+    return _Drawn(font, caps, tracking * PX_PER_PT) if caps or tracking else font
+
+
 def _wrap(words: list[str], font, max_px: float) -> tuple[int, float, float]:
     """Перенос слов по ширине: (строк, самая широкая строка, самое длинное слово) в пикселях."""
     lines, cur, widest, longest = 1, 0.0, 0.0, 0.0
@@ -45,10 +68,10 @@ def _wrap(words: list[str], font, max_px: float) -> tuple[int, float, float]:
 
 def measure(paragraphs: list[str], family: str, size_pt: float, box_w_emu: int, bold: bool = False,
             inset_lr: int = DEFAULT_INSET_LR, inset_tb: int = DEFAULT_INSET_TB, spacing: float = LINE_SPACING,
-            bullet_indent_emu: int = 0) -> Measure:
+            bullet_indent_emu: int = 0, caps: bool = False, tracking: float = 0.0) -> Measure:
     """Замер текста одного стиля в рамке заданной ширины: строки и высота."""
     size_pt = max(size_pt, 1.0)
-    font = pil_font(family or "Arial", int(round(size_pt * PX_PER_PT)), bold)
+    font = _font(family, size_pt, bold, caps, tracking)
     avail_px = max((box_w_emu - 2 * inset_lr - bullet_indent_emu) / EMU_PER_PT * PX_PER_PT, 1)
     total_lines, widest, longest = 0, 0.0, 0.0
     for p in paragraphs:
@@ -68,8 +91,8 @@ def measure(paragraphs: list[str], family: str, size_pt: float, box_w_emu: int, 
     )
 
 
-# (кегль пт, жирный, интервал до пт, интервал после пт, множитель строки, семейство шрифта)
-ParaStyle = tuple[float, bool, float, float, float, str]
+# (кегль пт, жирный, интервал до пт, интервал после пт, множитель строки, семейство шрифта[, капс, разрядка пт])
+ParaStyle = tuple
 
 
 def measure_rich(paragraphs: list[str], styles: list[ParaStyle], box_w_emu: int, inset_lr: int = DEFAULT_INSET_LR,
@@ -78,23 +101,28 @@ def measure_rich(paragraphs: list[str], styles: list[ParaStyle], box_w_emu: int,
     основным текстом, пункты с интервалом между ними). Интервалы считаются между абзацами.
     """
     n, lines, h_pt, widest, longest = len(paragraphs), 0, 0.0, 0, 0
-    for i, (p, (size, bold, before, after, line, family)) in enumerate(zip(paragraphs, styles)):
-        m = measure([p], family, size, box_w_emu, bold, inset_lr, 0)
+    for i, (p, st) in enumerate(zip(paragraphs, styles)):
+        size, bold, before, after, line, family = st[:6]
+        # капс и разрядка — необязательные поля стиля абзаца
+        caps, tracking = (st[6], st[7]) if len(st) >= 8 else (False, 0.0)
+        m = measure([p], family, size, box_w_emu, bold, inset_lr, 0, caps=caps, tracking=tracking)
         lines += m.lines
         h_pt += m.lines * size * LINE_SPACING * line + (before if i > 0 else 0.0) + (after if i < n - 1 else 0.0)
         widest, longest = max(widest, m.width_emu), max(longest, m.longest_word_emu)
     return Measure(lines=lines, height_emu=int(h_pt * EMU_PER_PT + 2 * inset_tb), width_emu=widest, longest_word_emu=longest)
 
 
-def fits(paragraphs: list[str], family: str, size_pt: float, box_w: int, box_h: int, bold: bool = False) -> bool:
+def fits(paragraphs: list[str], family: str, size_pt: float, box_w: int, box_h: int, bold: bool = False,
+         caps: bool = False, tracking: float = 0.0) -> bool:
     """Текст помещается в рамку этим кеглем (и ни одно слово не шире рамки)."""
-    m = measure(paragraphs, family, size_pt, box_w, bold)
+    m = measure(paragraphs, family, size_pt, box_w, bold, caps=caps, tracking=tracking)
     # запас 5% на расхождение метрик с рендером (например, жирного начертания нет и замер идёт по обычному)
     return m.height_emu <= box_h * 1.02 and m.longest_word_emu <= 0.95 * (box_w - 2 * DEFAULT_INSET_LR)
 
 
 def fit_font_size(paragraphs: list[str], family: str, size_pt: float, box_w: int, box_h: int, bold: bool = False,
-                  min_ratio: float = 0.75, allowed: list[float] | None = None) -> float | None:
+                  min_ratio: float = 0.75, allowed: list[float] | None = None, caps: bool = False,
+                  tracking: float = 0.0) -> float | None:
     """Наибольший кегль ≤ size_pt, который помещается; ограничен шкалой шаблона, если она задана."""
     candidates = sorted({s for s in (allowed or []) if min_ratio * size_pt <= s <= size_pt}, reverse=True)
     if not candidates:
@@ -103,13 +131,13 @@ def fit_font_size(paragraphs: list[str], family: str, size_pt: float, box_w: int
     if size_pt not in candidates:
         candidates.insert(0, size_pt)
     for s in candidates:
-        if fits(paragraphs, family, s, box_w, box_h, bold):
+        if fits(paragraphs, family, s, box_w, box_h, bold, caps, tracking):
             return s
     return None
 
 
 def fit_composite(paragraphs: list[str], sizes: list[float], family: str, box_w: int, box_h: int,
-                  bold_first: bool = False, min_factor: float = 0.45) -> float:
+                  bold_first: bool = False, min_factor: float = 0.45, caps: bool = False, tracking: float = 0.0) -> float:
     """Общий коэффициент уменьшения для рамки с несколькими стилями (например, крупное число + подпись):
     каждый абзац сохраняет своё соотношение кеглей; возвращает 1.0, если всё уже помещается.
     """
@@ -118,7 +146,7 @@ def fit_composite(paragraphs: list[str], sizes: list[float], family: str, box_w:
     while f >= min_factor:
         total, ok = 0, True
         for i, (p, s) in enumerate(zip(paragraphs, sizes)):
-            m = measure([p], family, s * f, box_w, bold_first and i == 0, inset_tb=0)
+            m = measure([p], family, s * f, box_w, bold_first and i == 0, inset_tb=0, caps=caps, tracking=tracking)
             total += m.height_emu
             ok = ok and m.longest_word_emu <= box_w - 2 * DEFAULT_INSET_LR
         if ok and total + 2 * DEFAULT_INSET_TB <= box_h * 1.02:
@@ -133,9 +161,10 @@ def snap_down(size: float, scale: list[float], floor_ratio: float = 0.6) -> floa
     return max(cands) if cands else size
 
 
-def max_chars_for(box_w: int, box_h: int, family: str, size_pt: float, bold: bool = False) -> int:
+def max_chars_for(box_w: int, box_h: int, family: str, size_pt: float, bold: bool = False, caps: bool = False,
+                  tracking: float = 0.0) -> int:
     """Примерный бюджет символов рамки (для промптов LLM)."""
-    font = pil_font(family or "Arial", int(round(size_pt * PX_PER_PT)), bold)
+    font = _font(family, size_pt, bold, caps, tracking)
     sample = "Пример текста для оценки ширины символов в строке"
     avg_px = font.getlength(sample) / len(sample)
     w_px = (box_w - 2 * DEFAULT_INSET_LR) / EMU_PER_PT * PX_PER_PT

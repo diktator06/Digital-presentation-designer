@@ -23,11 +23,12 @@ def measure_element(e: Element, size_factor: float = 1.0) -> Measure:
     base = e.style.size if e.style and e.style.size else 14
     font = (e.style.font if e.style else None) or "Arial"
     if e.para_styles and len(e.para_styles) == len(e.paragraphs):
-        styles = [((s.size or base) * size_factor, s.bold, s.space_before, s.space_after, s.line, s.font or font)
-                  for s in e.para_styles]
+        styles = [((s.size or base) * size_factor, s.bold, s.space_before, s.space_after, s.line, s.font or font,
+                   s.caps, s.tracking) for s in e.para_styles]
         return measure_rich(e.paragraphs, styles, w, inset_lr=91440, inset_tb=(t + b) // 2)
     return measure(e.paragraphs or [e.text], font, base * size_factor, w, bool(e.style and e.style.bold),
-                   inset_lr=91440, inset_tb=(t + b) // 2)
+                   inset_lr=91440, inset_tb=(t + b) // 2, caps=bool(e.style and e.style.caps),
+                   tracking=e.style.tracking if e.style else 0.0)
 
 
 @dataclass

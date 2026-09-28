@@ -86,3 +86,29 @@ def test_demo_content_pack_is_marked():
     assert listed[pack["id"]]["demo"] is True
     # пакет не из data/content демо-пакетом не считается
     assert all(not c["demo"] for c in listed.values() if set(c["files"]) != set(pack["files"]))
+
+
+def test_uploaded_template_survives_parser_update(tmp_path):
+    """После обновления разборщика загруженный через сайт шаблон разбирается заново с тем же id и именем,
+    а не пропадает из списка.
+    """
+    import json as _json
+
+    client = TestClient(api.app)
+    src = GENERATORS["dark_minimal"](tmp_path / "Мой шаблон.pptx")
+    tid = _upload(client, src)
+    try:
+        prof_path = api.WS / "templates" / tid / "profile.json"
+        data = _json.loads(prof_path.read_text(encoding="utf-8"))
+        data["parser_version"] = "0.0-старая"  # профиль от прежней версии разборщика
+        prof_path.write_text(_json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        api.TEMPLATES.pop(tid, None)
+        api._load_existing()
+        assert tid not in api.TEMPLATES  # устаревший профиль сам по себе не поднимается
+        stale = [(f, name) for f, name in api._stale_sources(set()) if api.file_sha256(f)[:12] == tid]
+        assert [name for _, name in stale] == ["Мой шаблон"]
+        assert analyze_template(stale[0][0], name="Мой шаблон").id == tid  # тот же id после повторного разбора
+    finally:
+        api.TEMPLATES[tid] = analyze_template(src, name="Мой шаблон")
+        client.delete(f"/api/templates/{tid}")
+        api._save_deleted(api._deleted() - {tid})

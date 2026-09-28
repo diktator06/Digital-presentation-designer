@@ -249,7 +249,8 @@ def _style(e: Element) -> TextStyle:
     """Стиль текста слота из эффективного стиля элемента."""
     if not e.style:
         return TextStyle()
-    return TextStyle(font=e.style.font, size=e.style.size, bold=e.style.bold, color_hex=e.style.color)
+    return TextStyle(font=e.style.font, size=e.style.size, bold=e.style.bold, color_hex=e.style.color,
+                     caps=e.style.caps, tracking=e.style.tracking)
 
 
 def _avail_height(e: Element, elements: list[Element], slide_h: int, bottom_margin: int) -> int:

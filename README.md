@@ -98,7 +98,7 @@ decksmith serve                                         # http://localhost:8000
 decksmith analyze шаблон.pptx --sheet            # профиль шаблона + картинка декомпозиции
 decksmith audit колода.pptx --template шаблон.pptx
 decksmith skills                                   # версии скиллов/агентов и каталог проверок
-pytest -q                                          # 59 тестов (путь с моделью — на эмуляторе, без сети)
+pytest -q                                          # 62 теста (путь с моделью — на эмуляторе, без сети)
 python scripts/stress.py <шаблоны...> --synthetic  # слепой стресс-тест
 ```
 
